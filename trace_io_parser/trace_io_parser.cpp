@@ -57,25 +57,25 @@ enum nvme_zns_mgmt_recv_action {
  * that depend on those, so just define them as no-ops to allow the app to link.
  */
 extern "C" {
-	void *
-	spdk_realloc(void *buf, size_t size, size_t align)
-	{
-		assert(false);
+    void *
+    spdk_realloc(void *buf, size_t size, size_t align)
+    {
+        assert(false);
 
-		return NULL;
-	}
+        return NULL;
+    }
 
-	void
-	spdk_free(void *buf)
-	{
-		assert(false);
-	}
+    void
+    spdk_free(void *buf)
+    {
+        assert(false);
+    }
 
-	uint64_t
-	spdk_get_ticks(void)
-	{
-		return 0;
-	}
+    uint64_t
+    spdk_get_ticks(void)
+    {
+        return 0;
+    }
 } /* extern "C" */
 
 static void usage(void);
@@ -85,40 +85,40 @@ static char *g_exe_name;
 static float
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
 {
-	return ((float)tsc) * 1000 * 1000 / tsc_rate;
+    return ((float)tsc) * 1000 * 1000 / tsc_rate;
 }
 
 static const char *
 format_argname(const char *name)
 {
-	static char namebuf[16];
+    static char namebuf[16];
 
-	snprintf(namebuf, sizeof(namebuf), "%s: ", name);
-	return namebuf;
+    snprintf(namebuf, sizeof(namebuf), "%s: ", name);
+    return namebuf;
 }
 
 static void
 print_ptr(const char *arg_string, uint64_t arg)
 {
-	printf("%-7.7s0x%-14jx ", format_argname(arg_string), arg);
+    printf("%-7.7s0x%-14jx ", format_argname(arg_string), arg);
 }
 
 /*
 static void
 print_uint64(const char *arg_string, uint64_t arg)
 {
-	
-	 //  Print arg as signed, since -1 is a common value especially
-	 //  for FLUSH WRITEBUF when writev() returns -1 due to full
-	 //  socket buffer.
+
+     //  Print arg as signed, since -1 is a common value especially
+     //  for FLUSH WRITEBUF when writev() returns -1 due to full
+     //  socket buffer.
 	 
-	printf("%-7.7s%-16jd ", format_argname(arg_string), arg);
+    printf("%-7.7s%-16jd ", format_argname(arg_string), arg);
 }
 
 static void
 print_string(const char *arg_string, const char *arg)
 {
-	printf("%-7.7s%-16.16s ", format_argname(arg_string), arg);
+    printf("%-7.7s%-16.16s ", format_argname(arg_string), arg);
 }
 */
 
@@ -234,7 +234,7 @@ set_op_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
         *cdw10 = true;
         *cdw11 = true;
         *cdw12 = true;
-        *cdw13 = true; // not sure if this is needed
+        *cdw13 = true;
         break;
     case NVME_OPC_WRITE:
     case NVME_OPC_READ:    
@@ -270,10 +270,10 @@ set_op_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 static void
 process_tp_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_offset)
 {
-	struct spdk_trace_entry *e = entry->entry;
-	const struct spdk_trace_tpoint  *d;
-	float	us;
-	size_t	i;
+    struct spdk_trace_entry *e = entry->entry;
+    const struct spdk_trace_tpoint  *d;
+    float	us;
+    size_t	i;
     static uint8_t opc;
     const char *slba_str = "slba";
     const char *nlb_str = "nlb";
@@ -301,7 +301,7 @@ process_tp_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint6
     /* 
      * process tracepoint args
      */
-	for (i = 1; i < d->num_args; ++i) {
+    for (i = 1; i < d->num_args; ++i) {
         if (i == 1) { /* print opcode & set cdw flags*/ 
             opc = print_nvme_io_op(entry->args[i].integer);
             set_op_flags(opc, &cdw10, &cdw11, &cdw12, &cdw13);
@@ -330,13 +330,13 @@ process_tp_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint6
                 print_ptr(ndw_str, (entry->args[i].integer + 0x1) & UINT32BIT_MASK);
             else
                 print_ptr(nlb_str, (entry->args[i].integer + 0x1) & UINT16BIT_MASK);
-        } else if (i == 7 && cdw13) { /* zsa_8b || zra_8b || dsm_8b (read write) */
+        } else if (i == 7 && cdw13) { /* zsa_8b || zra_8b */
             print_zone_action (opc, (entry->args[i].integer) & UINT8BIT_MASK);
         } else {
             continue;
         }
-	}
-	printf("\n");
+    }
+    printf("\n");
 }
 
 static void
@@ -359,98 +359,96 @@ usage(void)
 int
 main(int argc, char **argv)
 {
-	struct spdk_trace_parser_opts	opts;
-	struct spdk_trace_parser_entry	entry;
-	int				lcore = SPDK_TRACE_MAX_LCORE;
-	uint64_t			tsc_offset, entry_count;
-	const char			*app_name = NULL;
-	const char			*file_name = NULL;
-	int				op, i;
-	char				shm_name[64];
-	int				shm_id = -1, shm_pid = -1;
-	const struct spdk_trace_tpoint	*d;
+    struct spdk_trace_parser_opts	opts;
+    struct spdk_trace_parser_entry	entry;
+    int				lcore = SPDK_TRACE_MAX_LCORE;
+    uint64_t			tsc_offset, entry_count;
+    const char			*app_name = NULL;
+    const char			*file_name = NULL;
+    int				op, i;
+    char				shm_name[64];
+    int				shm_id = -1, shm_pid = -1;
+    const struct spdk_trace_tpoint	*d;
     struct spdk_trace_entry     *e;
     const char tp_name[] = "NVME_IO_SUBMIT";
 
+    g_exe_name = argv[0];
+    while ((op = getopt(argc, argv, "c:f:i:jp:s:t")) != -1) {
+        switch (op) {
+        case 'c':
+            lcore = atoi(optarg);
+            if (lcore > SPDK_TRACE_MAX_LCORE) {
+                fprintf(stderr, "Selected lcore: %d "
+                    "exceeds maximum %d\n", lcore,
+                    SPDK_TRACE_MAX_LCORE);
+                exit(1);
+            }
+            break;
+        case 'i':
+            shm_id = atoi(optarg);
+            break;
+        case 'p':
+            shm_pid = atoi(optarg);
+            break;
+        case 's':
+            app_name = optarg;
+            break;
+        case 'f':
+            file_name = optarg;
+            break;
+        case 't':
+            g_print_tsc = true;
+            break;
+        default:
+            usage();
+            exit(1);
+        }
+    }
 
-	g_exe_name = argv[0];
-	while ((op = getopt(argc, argv, "c:f:i:jp:s:t")) != -1) {
-		switch (op) {
-		case 'c':
-			lcore = atoi(optarg);
-			if (lcore > SPDK_TRACE_MAX_LCORE) {
-				fprintf(stderr, "Selected lcore: %d "
-					"exceeds maximum %d\n", lcore,
-					SPDK_TRACE_MAX_LCORE);
-				exit(1);
-			}
-			break;
-		case 'i':
-			shm_id = atoi(optarg);
-			break;
-		case 'p':
-			shm_pid = atoi(optarg);
-			break;
-		case 's':
-			app_name = optarg;
-			break;
-		case 'f':
-			file_name = optarg;
-			break;
-		case 't':
-			g_print_tsc = true;
-			break;
-		default:
-			usage();
-			exit(1);
-		}
-	}
+    if (file_name != NULL && app_name != NULL) {
+        fprintf(stderr, "-f and -s are mutually exclusive\n");
+        usage();
+        exit(1);
+    }
 
-	if (file_name != NULL && app_name != NULL) {
-		fprintf(stderr, "-f and -s are mutually exclusive\n");
-		usage();
-		exit(1);
-	}
+    if (file_name == NULL && app_name == NULL) {
+        fprintf(stderr, "One of -f and -s must be specified\n");
+        usage();
+        exit(1);
+    }
 
-	if (file_name == NULL && app_name == NULL) {
-		fprintf(stderr, "One of -f and -s must be specified\n");
-		usage();
-		exit(1);
-	}
+    if (!file_name) {
+        if (shm_id >= 0) {
+            snprintf(shm_name, sizeof(shm_name), "/%s_trace.%d", app_name, shm_id);
+        } else {
+            snprintf(shm_name, sizeof(shm_name), "/%s_trace.pid%d", app_name, shm_pid);
+        }
+        file_name = shm_name;
+    }
 
-	
-	if (!file_name) {
-		if (shm_id >= 0) {
-			snprintf(shm_name, sizeof(shm_name), "/%s_trace.%d", app_name, shm_id);
-		} else {
-			snprintf(shm_name, sizeof(shm_name), "/%s_trace.pid%d", app_name, shm_pid);
-		}
-		file_name = shm_name;
-	}
+    opts.filename = file_name;
+    opts.lcore = lcore;
+    opts.mode = app_name == NULL ? SPDK_TRACE_PARSER_MODE_FILE : SPDK_TRACE_PARSER_MODE_SHM;
+    g_parser = spdk_trace_parser_init(&opts);
+    if (g_parser == NULL) {
+        fprintf(stderr, "Failed to initialize trace parser\n");
+        exit(1);
+    }
 
-	opts.filename = file_name;
-	opts.lcore = lcore;
-	opts.mode = app_name == NULL ? SPDK_TRACE_PARSER_MODE_FILE : SPDK_TRACE_PARSER_MODE_SHM;
-	g_parser = spdk_trace_parser_init(&opts);
-	if (g_parser == NULL) {
-		fprintf(stderr, "Failed to initialize trace parser\n");
-		exit(1);
-	}
+    g_flags = spdk_trace_parser_get_flags(g_parser);
+    printf("TSC Rate: %ju\n", g_flags->tsc_rate);
 
-	g_flags = spdk_trace_parser_get_flags(g_parser);
-	printf("TSC Rate: %ju\n", g_flags->tsc_rate);
-	
-	for (i = 0; i < SPDK_TRACE_MAX_LCORE; ++i) {
-		if (lcore == SPDK_TRACE_MAX_LCORE || i == lcore) {
-			entry_count = spdk_trace_parser_get_entry_count(g_parser, i);
-			if (entry_count > 0) {
-				printf("Trace Size of lcore (%d): %ju\n", i, entry_count);
-			}
-		}
-	}
+    for (i = 0; i < SPDK_TRACE_MAX_LCORE; ++i) {
+        if (lcore == SPDK_TRACE_MAX_LCORE || i == lcore) {
+            entry_count = spdk_trace_parser_get_entry_count(g_parser, i);
+            if (entry_count > 0) {
+                printf("Trace Size of lcore (%d): %ju\n", i, entry_count);
+            }
+        }
+    }
 
-	tsc_offset = spdk_trace_parser_get_tsc_offset(g_parser);
-	
+    tsc_offset = spdk_trace_parser_get_tsc_offset(g_parser);
+    
     while (spdk_trace_parser_next_entry(g_parser, &entry)) {
         if (entry.entry->tsc < tsc_offset) {
             continue;
@@ -467,7 +465,7 @@ main(int argc, char **argv)
         process_tp_entry(&entry, g_flags->tsc_rate, tsc_offset);
     }   
 
-	spdk_trace_parser_cleanup(g_parser);
+    spdk_trace_parser_cleanup(g_parser);
 
-	return (0);
+    return (0);
 }
