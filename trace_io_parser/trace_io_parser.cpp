@@ -7,6 +7,10 @@
 
 #include <map>
 
+#define UINT8BIT_MASK 0xFF
+#define UINT16BIT_MASK 0xFFFF
+#define UINT32BIT_MASK 0xFFFFFFFF
+
 extern "C" {
 #include "spdk/trace_parser.h"
 #include "spdk/util.h"
@@ -29,9 +33,23 @@ enum nvme_io_cmd_opc {
     NVME_OPC_RESERVATION_REPORT = 0x0E,
     NVME_OPC_RESERVATION_ACQUIRE = 0x11,
     NVME_OPC_RESERVATION_RELEASE = 0x15,
-    NVME_ZNS_OPC_ZONE_APPEND = 0x79,
-    NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND = 0x7A,
-    NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV = 0x7D,
+    NVME_OPC_COPY = 0x19,
+    NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND = 0x79,
+    NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV = 0x7A,
+    NVME_ZNS_OPC_ZONE_APPEND = 0x7D,
+};
+
+enum nvme_zns_mgmt_send_action {
+    NVME_ZNS_MGMT_SEND_ACTION_OPEN = 0x01,
+    NVME_ZNS_MGMT_SEND_ACTION_CLOSE = 0x02,
+    NVME_ZNS_MGMT_SEND_ACTION_FINISH = 0x03,
+    NVME_ZNS_MGMT_SEND_ACTION_RESET = 0x04,
+    NVME_ZNS_MGMT_SEND_ACTION_OFFLINE = 0x05,
+};
+
+enum nvme_zns_mgmt_recv_action {
+    NVME_ZNS_MGMT_RECV_ACTION_REPORT_ZONES = 0x00,
+    NVME_ZNS_MGMT_RECV_ACTION_EXTENDED_REPORT_ZONES = 0x01,
 };
 
 /* This is a bit ugly, but we don't want to include env_dpdk in the app, while spdk_util, which we
@@ -85,14 +103,15 @@ print_ptr(const char *arg_string, uint64_t arg)
 	printf("%-7.7s0x%-14jx ", format_argname(arg_string), arg);
 }
 
+/*
 static void
 print_uint64(const char *arg_string, uint64_t arg)
 {
-	/*
-	 * Print arg as signed, since -1 is a common value especially
-	 *  for FLUSH WRITEBUF when writev() returns -1 due to full
-	 *  socket buffer.
-	 */
+	
+	 //  Print arg as signed, since -1 is a common value especially
+	 //  for FLUSH WRITEBUF when writev() returns -1 due to full
+	 //  socket buffer.
+	 
 	printf("%-7.7s%-16jd ", format_argname(arg_string), arg);
 }
 
@@ -101,66 +120,172 @@ print_string(const char *arg_string, const char *arg)
 {
 	printf("%-7.7s%-16.16s ", format_argname(arg_string), arg);
 }
+*/
 
+/* 
+ * Print the zone action
+ */
 static void
+print_zone_action (uint8_t opc, uint64_t zone_act) 
+{
+    if (opc ==  NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND) {
+        switch (zone_act) {
+        case NVME_ZNS_MGMT_SEND_ACTION_OPEN:
+            printf("  %-20.20s ", "OPEN ZONE");
+            break;
+        case NVME_ZNS_MGMT_SEND_ACTION_CLOSE:
+            printf("  %-20.20s ", "CLOSE ZONE");
+            break;
+        case NVME_ZNS_MGMT_SEND_ACTION_FINISH:
+            printf("  %-20.20s ", "FINISH ZONE");
+            break;
+        case NVME_ZNS_MGMT_SEND_ACTION_RESET:
+            printf("  %-20.20s ", "RESET ZONE");
+            break;
+        case NVME_ZNS_MGMT_SEND_ACTION_OFFLINE:
+            printf("  %-20.20s ", "OFFLINE ZONE");
+            break;
+        default:
+            break;
+        }
+    } else if (opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV){
+        switch (zone_act) {
+        case NVME_ZNS_MGMT_RECV_ACTION_REPORT_ZONES:
+            printf("  %-20.20s ", "REPORT ZONE");
+            break;
+        case NVME_ZNS_MGMT_RECV_ACTION_EXTENDED_REPORT_ZONES:
+            printf("  %-20.20s ", "EXT REPORT ZONE");
+            break;
+        default:
+            break;
+        }
+    } else {
+        printf("  %-20.20s ", "unknown");
+    }
+}
+
+/* 
+ * Print the opcode of the IO command
+ */
+static uint8_t
 print_nvme_io_op(uint64_t arg)
 {
     switch (arg) {
     case NVME_OPC_FLUSH:
-        printf("%-15.15s ", "flush");
+        printf("  %-20.20s ", "FLUSH");
         break;
     case NVME_OPC_WRITE:
-        printf("%-15.15s ", "write");
+        printf("  %-20.20s ", "WRITE");
         break;
     case NVME_OPC_READ:
-        printf("%-15.15s ", "read");
+        printf("  %-20.20s ", "READ");
         break;
     case NVME_OPC_WRITE_UNCORRECTABLE:
-        printf("%-15.15s ", "write_uncorrectable");
+        printf("  %-20.20s ", "WRITE UNCORRECTABLE");
         break;
     case NVME_OPC_COMPARE:
-        printf("%-15.15s ", "compare");
+        printf("  %-20.20s ", "COMPARE");
         break;
     case NVME_OPC_WRITE_ZEROES:
-        printf("%-15.15s ", "write_zeroes");
+        printf("  %-20.20s ", "WRITE ZEROES");
         break;
     case NVME_OPC_DATASET_MANAGEMENT:
-        printf("%-15.15s ", "dataset_management");
+        printf("  %-20.20s ", "DATASET MGMT");
         break;
     case NVME_OPC_VERIFY:
-        printf("%-15.15s ", "verify");
+        printf("  %-20.20s ", "VERIFY");
         break;
     case NVME_OPC_RESERVATION_REGISTER: 
-        printf("%-15.15s ", "reservation_register");
+        printf("  %-20.20s ", "RESERVATION REGISTER");
         break; 
     case NVME_OPC_RESERVATION_REPORT: 
-        printf("%-15.15s ", "reservation_report");
+        printf("  %-20.20s ", "RESERVATION REPORT");
         break;
     case NVME_OPC_RESERVATION_ACQUIRE: 
-        printf("%-15.15s ", "reservation_acquire");
+        printf("  %-20.20s ", "RESERVATION ACQUIRE");
         break;
     case NVME_OPC_RESERVATION_RELEASE:
-        printf("%-15.15s ", "reservation_release");
+        printf("  %-20.20s ", "RESERVATION RELEASE");
+        break;
+    case NVME_OPC_COPY:
+        printf("  %-20.20s ", "COPY");
         break;
     case NVME_ZNS_OPC_ZONE_APPEND:
-        printf("%-15.15s ", "zone_append");
+        printf("  %-20.20s ", "ZONE APPEND");
         break;
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-        printf("%-15.15s ", "zone_mgmt_send");
+        printf("  %-20.20s ", "ZONE MGMT SEND");
         break;
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-        printf("%-15.15s ", "zone_mgmt_recv");
+        printf("  %-15.15s ", "ZONE MGMT RECV");
+        break;
+    default:
+        printf("  %-20.20s ", "unknown");
+        break;
+    }
+    return (uint8_t)arg;
+}
+
+static void
+set_op_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
+{
+    switch (opc) {
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+        *cdw10 = true;
+        *cdw11 = true;
+        *cdw12 = true;
+        *cdw13 = true; // not sure if this is needed
+        break;
+    case NVME_OPC_WRITE:
+    case NVME_OPC_READ:    
+    case NVME_OPC_WRITE_UNCORRECTABLE:
+    case NVME_OPC_COMPARE:
+    case NVME_OPC_WRITE_ZEROES:
+    case NVME_OPC_VERIFY:
+    case NVME_OPC_COPY:
+    case NVME_ZNS_OPC_ZONE_APPEND:
+        *cdw10 = true;
+        *cdw11 = true;
+        *cdw12 = true;
+        break;
+    case NVME_OPC_DATASET_MANAGEMENT:
+        *cdw10 = true;
+        break;
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+        *cdw10 = true;
+        *cdw11 = true;
+        *cdw13 = true;
+        break;
+    case NVME_OPC_FLUSH:
+    case NVME_OPC_RESERVATION_REGISTER: 
+    case NVME_OPC_RESERVATION_REPORT:
+    case NVME_OPC_RESERVATION_ACQUIRE:
+    case NVME_OPC_RESERVATION_RELEASE:
+        break;
+    default:
         break;
     }
 }
 
 static void
-process_event(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_offset)
+process_tp_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_offset)
 {
-	struct spdk_trace_entry		*e = entry->entry;
-	const struct spdk_trace_tpoint	*d;
-	float				us;
-	size_t				i;
+	struct spdk_trace_entry *e = entry->entry;
+	const struct spdk_trace_tpoint  *d;
+	float	us;
+	size_t	i;
+    static uint8_t opc;
+    const char *slba_str = "slba";
+    const char *nlb_str = "nlb";
+    const char *nr_str = "nr";
+    const char *ndw_str = "ndw";
+    /* cdw flag */
+    bool    cdw10 = false;
+    bool    cdw11 = false;
+    bool    cdw12 = false;
+    bool    cdw13 = false;
+    /* cdw value */
+    uint64_t    slba;
 
 	d = &g_flags->tpoint[e->tpoint_id];
 	us = get_us_from_tsc(e->tsc - tsc_offset, tsc_rate);
@@ -173,23 +298,43 @@ process_event(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t
 		printf("(%9ju) ", e->tsc - tsc_offset);
 	}
 
+    /* 
+     * process tracepoint args
+     */
 	for (i = 1; i < d->num_args; ++i) {
-        if (i == 1) {
-            print_nvme_io_op(entry->args[i].integer);
+        if (i == 1) { /* print opcode & set cdw flags*/ 
+            opc = print_nvme_io_op(entry->args[i].integer);
+            set_op_flags(opc, &cdw10, &cdw11, &cdw12, &cdw13);
+            
+            if (opc == NVME_OPC_FLUSH || 
+                opc == NVME_OPC_RESERVATION_REGISTER ||
+                opc == NVME_OPC_RESERVATION_REPORT ||
+                opc == NVME_OPC_RESERVATION_ACQUIRE ||
+                opc == NVME_OPC_RESERVATION_RELEASE) {
+                break;
+            }
+        } else if (i == 3) { /* nsid */
+            print_ptr(d->args[i].name, (uint64_t)entry->args[i].pointer);
+        } else if (i == 4 && cdw10) { /* slba_l64b | nr_8b (dataset_mgmt)*/
+            if (opc != NVME_OPC_DATASET_MANAGEMENT)
+                slba = (uint64_t)entry->args[i].integer;
+            else 
+                print_ptr(nr_str, entry->args[i].integer & UINT8BIT_MASK);
+        } else if (i == 5 && cdw11) { /* slba_h64b*/
+            slba |= ((uint64_t)entry->args[i].integer & UINT32BIT_MASK) << 32;
+            print_ptr(slba_str, entry->args[i].integer);
+        } else if (i == 6 && cdw12) { /* nlb_16b | nr_8b (copy) | ndw_32b (z_mgmt_recv) */
+            if (opc == NVME_OPC_COPY)
+                print_ptr(nr_str, (entry->args[i].integer + 0x1) & UINT8BIT_MASK);
+            else if (opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV)
+                print_ptr(ndw_str, (entry->args[i].integer + 0x1) & UINT32BIT_MASK);
+            else
+                print_ptr(nlb_str, (entry->args[i].integer + 0x1) & UINT16BIT_MASK);
+        } else if (i == 7 && cdw13) { /* zsa_8b || zra_8b || dsm_8b (read write) */
+            print_zone_action (opc, (entry->args[i].integer) & UINT8BIT_MASK);
+        } else {
             continue;
         }
-
-		switch (d->args[i].type) {
-		case SPDK_TRACE_ARG_TYPE_PTR:
-			print_ptr(d->args[i].name, (uint64_t)entry->args[i].pointer);
-			break;
-		case SPDK_TRACE_ARG_TYPE_INT:
-			print_uint64(d->args[i].name, entry->args[i].integer);
-			break;
-		case SPDK_TRACE_ARG_TYPE_STR:
-			print_string(d->args[i].name, entry->args[i].string);
-			break;
-		}
 	}
 	printf("\n");
 }
@@ -319,7 +464,7 @@ main(int argc, char **argv)
         } else if (strcmp(d->name, tp_name) == 0 && entry.args[0].integer) { //admin == true
             continue;   
         }
-        process_event(&entry, g_flags->tsc_rate, tsc_offset);
+        process_tp_entry(&entry, g_flags->tsc_rate, tsc_offset);
     }   
 
 	spdk_trace_parser_cleanup(g_parser);
