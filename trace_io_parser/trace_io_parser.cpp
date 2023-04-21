@@ -20,6 +20,7 @@ static const struct spdk_trace_flags *g_flags;
 static bool g_print_tsc = false;
 static uint64_t read_cnt = 0, write_cnt = 0;
 static float rw_ratio = 0.0;
+static int output_file_entry = 0;
 
 enum nvme_io_cmd_opc {
     NVME_OPC_FLUSH = 0x00,
@@ -152,24 +153,24 @@ print_object_id(const struct spdk_trace_tpoint *d, struct spdk_trace_parser_entr
  * Print the zone action
  */
 static void
-print_zone_action (uint8_t opc, uint64_t zone_act) 
+set_zone_act_name (uint8_t opc, uint64_t zone_act, const char **zone_act_name) 
 {
     if (opc ==  NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND) {
         switch (zone_act) {
         case NVME_ZNS_MGMT_SEND_ACTION_OPEN:
-            printf("%-20.20s ", "OPEN ZONE");
+            *zone_act_name = "OPEN ZONE";
             break;
         case NVME_ZNS_MGMT_SEND_ACTION_CLOSE:
-            printf("%-20.20s ", "CLOSE ZONE");
+            *zone_act_name = "CLOSE ZONE";
             break;
         case NVME_ZNS_MGMT_SEND_ACTION_FINISH:
-            printf("%-20.20s ", "FINISH ZONE");
+            *zone_act_name = "FINISH ZONE";
             break;
         case NVME_ZNS_MGMT_SEND_ACTION_RESET:
-            printf("%-20.20s ", "RESET ZONE");
+            *zone_act_name = "RESET ZONE";
             break;
         case NVME_ZNS_MGMT_SEND_ACTION_OFFLINE:
-            printf("%-20.20s ", "OFFLINE ZONE");
+            *zone_act_name = "OFFLINE ZONE";
             break;
         default:
             break;
@@ -177,16 +178,16 @@ print_zone_action (uint8_t opc, uint64_t zone_act)
     } else if (opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV){
         switch (zone_act) {
         case NVME_ZNS_MGMT_RECV_ACTION_REPORT_ZONES:
-            printf("%-20.20s ", "REPORT ZONE");
+            *zone_act_name = "REPORT ZONE";
             break;
         case NVME_ZNS_MGMT_RECV_ACTION_EXTENDED_REPORT_ZONES:
-            printf("%-20.20s ", "EXT REPORT ZONE");
+            *zone_act_name = "EXT REPORT ZONE";
             break;
         default:
             break;
         }
     } else {
-        printf("%-20.20s ", "unknown");
+        *zone_act_name = "unknown";
     }
 }
 
@@ -194,66 +195,66 @@ print_zone_action (uint8_t opc, uint64_t zone_act)
  * Print the opcode of the IO command
  */
 static uint8_t
-print_nvme_io_op(uint64_t arg)
+set_opc_name(uint64_t arg, const char **opc_name)
 {
     switch (arg) {
     case NVME_OPC_FLUSH:
-        printf("%-20.20s ", "FLUSH");
+        *opc_name = "FLUSH";
         break;
     case NVME_OPC_WRITE:
-        printf("%-20.20s ", "WRITE");
+        *opc_name = "WRITE";
         break;
     case NVME_OPC_READ:
-        printf("%-20.20s ", "READ");
+        *opc_name =  "READ";
         break;
     case NVME_OPC_WRITE_UNCORRECTABLE:
-        printf("%-20.20s ", "WRITE UNCORRECTABLE");
+        *opc_name =  "WRITE UNCORRECTABLE";
         break;
     case NVME_OPC_COMPARE:
-        printf("%-20.20s ", "COMPARE");
+        *opc_name =  "COMPARE";
         break;
     case NVME_OPC_WRITE_ZEROES:
-        printf("%-20.20s ", "WRITE ZEROES");
+        *opc_name =  "WRITE ZEROES";
         break;
     case NVME_OPC_DATASET_MANAGEMENT:
-        printf("%-20.20s ", "DATASET MGMT");
+        *opc_name =  "DATASET MGMT";
         break;
     case NVME_OPC_VERIFY:
-        printf("%-20.20s ", "VERIFY");
+        *opc_name =  "VERIFY";
         break;
     case NVME_OPC_RESERVATION_REGISTER: 
-        printf("%-20.20s ", "RESERVATION REGISTER");
+        *opc_name =  "RESERVATION REGISTER";
         break; 
     case NVME_OPC_RESERVATION_REPORT: 
-        printf("%-20.20s ", "RESERVATION REPORT");
+        *opc_name =  "RESERVATION REPORT";
         break;
     case NVME_OPC_RESERVATION_ACQUIRE: 
-        printf("%-20.20s ", "RESERVATION ACQUIRE");
+        *opc_name =  "RESERVATION ACQUIRE";
         break;
     case NVME_OPC_RESERVATION_RELEASE:
-        printf("%-20.20s ", "RESERVATION RELEASE");
+        *opc_name =  "RESERVATION RELEASE";
         break;
     case NVME_OPC_COPY:
-        printf("%-20.20s ", "COPY");
+        *opc_name =  "COPY";
         break;
     case NVME_ZNS_OPC_ZONE_APPEND:
-        printf("%-20.20s ", "ZONE APPEND");
+        *opc_name =  "ZONE APPEND";
         break;
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-        printf("%-20.20s ", "ZONE MGMT SEND");
+        *opc_name =  "ZONE MGMT SEND";
         break;
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-        printf("%-15.15s ", "ZONE MGMT RECV");
+        *opc_name =  "ZONE MGMT RECV";
         break;
     default:
-        printf("%-20.20s ", "unknown");
+        *opc_name = "unknown";
         break;
     }
     return (uint8_t)arg;
 }
 
 static void
-set_op_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
+set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 {
     switch (opc) {
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
@@ -323,14 +324,110 @@ rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
     }
 }
 
+struct output_file_data {
+    uint32_t lcore;
+    uint64_t tsc_rate;
+    uint64_t tsc_timestamp;
+    uint32_t obj_idx;
+    uint64_t obj_id;
+    uint64_t tsc_sc_time; /* object from submit to complete (us) */
+    char tpoint_name[32]; 
+    char opc_name[32];
+    char zone_act_name[32];
+    uint32_t nsid; /* namespace id*/
+    uint64_t slba; /* start logical block address */
+    uint32_t nlb; /* nlb_16b | nr_8b (copy) | ndw_32b (z_mgmt_recv) */
+    uint32_t nr;
+    uint32_t ndw;
+    uint32_t cpl; /* status code */
+};
+
 static void
-process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_offset)
+process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_base, FILE *fptr)
+{
+    struct spdk_trace_entry *e = entry->entry;
+    const struct spdk_trace_tpoint  *d;
+    size_t	i;
+    struct output_file_data buffer;
+    static int8_t opc;
+    const char *opc_name;
+    const char *zone_act_name;
+    bool    cdw10 = false;
+    bool    cdw11 = false;
+    bool    cdw12 = false;
+    bool    cdw13 = false;
+
+    d = &g_flags->tpoint[e->tpoint_id];
+    
+    buffer.lcore = entry->lcore;
+    buffer.tsc_rate = tsc_rate;
+    buffer.tsc_timestamp = e->tsc - tsc_base;    
+    buffer.obj_idx = entry->object_index;
+    buffer.obj_id = e->object_id;
+    if (!d->new_object && d->object_type != OBJECT_NONE && entry->object_index != UINT64_MAX) {
+        buffer.tsc_sc_time = e->tsc - entry->object_start;
+    }
+
+    strcpy(buffer.tpoint_name, d->name);
+    if (strcmp(buffer.tpoint_name, "NVME_IO_SUBMIT") == 0) {
+        for (i = 1; i < d->num_args; ++i) {
+            if (i == 1) { /* print opcode & set cdw flags*/ 
+                opc = set_opc_name(entry->args[i].integer, &opc_name);
+                strcpy(buffer.opc_name, opc_name);
+                set_opc_flags(opc, &cdw10, &cdw11, &cdw12, &cdw13);
+                if (opc == NVME_OPC_FLUSH || 
+                    opc == NVME_OPC_RESERVATION_REGISTER ||
+                    opc == NVME_OPC_RESERVATION_REPORT ||
+                    opc == NVME_OPC_RESERVATION_ACQUIRE ||
+                    opc == NVME_OPC_RESERVATION_RELEASE) {
+                    break;
+                }
+            } else if (i == 3) { /* nsid */
+                buffer.nsid = (uint64_t)entry->args[i].pointer;
+            } else if (i == 4 && cdw10) { /* slba_l64b | nr_8b (dataset_mgmt) */
+                if (opc != NVME_OPC_DATASET_MANAGEMENT)
+                    buffer.slba = (uint64_t)entry->args[i].integer;
+                else 
+                    buffer.nr = entry->args[i].integer & UINT8BIT_MASK;
+            } else if (i == 5 && cdw11) { /* slba_h64b */
+                buffer.slba |= ((uint64_t)entry->args[i].integer & UINT32BIT_MASK) << 32;
+            } else if (i == 6 && cdw12) { /* nlb_16b | nr_8b (copy) | ndw_32b (z_mgmt_recv) */
+                if (opc == NVME_OPC_COPY)
+                    buffer.nr = entry->args[i].integer & UINT8BIT_MASK;
+                else if (opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV)
+                    buffer.ndw = entry->args[i].integer & UINT32BIT_MASK;
+                else
+                    buffer.nlb = entry->args[i].integer & UINT16BIT_MASK;
+            } else if (i == 7 && cdw13) { /* zsa_8b || zra_8b */
+                set_zone_act_name(opc, entry->args[i].integer & UINT8BIT_MASK, &zone_act_name);
+                strcpy(buffer.zone_act_name, zone_act_name);
+            } else {
+                continue;
+            }
+        }
+    } else if (strcmp(buffer.tpoint_name, "NVME_IO_COMPLETE") == 0) {
+        for (i = 1; i < d->num_args; ++i) {
+            if (strcmp(d->args[i].name, "cpl") == 0) {
+                buffer.cpl = entry->args[i].integer;
+            } else 
+                continue;
+        }
+    }
+    
+    fwrite(&buffer, sizeof(struct output_file_data), 1, fptr);
+    output_file_entry++;
+}
+
+static void
+process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_base)
 {
     struct spdk_trace_entry *e = entry->entry;
     const struct spdk_trace_tpoint  *d;
     float	us;
     size_t	i;
-    static uint8_t opc;
+    static int8_t opc;
+    const char *opc_name = NULL;
+    const char *zone_act_name = NULL;
     const char *slba_str = "slba";
     const char *nlb_str = "nlb";
     const char *nr_str = "nr";
@@ -344,15 +441,17 @@ process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, u
     uint64_t    slba;
 
     d = &g_flags->tpoint[e->tpoint_id];
-    us = get_us_from_tsc(e->tsc - tsc_offset, tsc_rate);
+    us = get_us_from_tsc(e->tsc - tsc_base, tsc_rate);
 
     /* 
      * print lcore & tsc_diff (us) 
      */
     printf("core%2d: %10.3f ", entry->lcore, us);
     if (g_print_tsc) {
-        printf("(%9ju) ", e->tsc - tsc_offset);
+        printf("(%9ju) ", e->tsc - tsc_base);
     }
+
+    printf("  %-*s ", (int)sizeof(d->name), d->name);
 
     if (d->new_object) {
         print_object_id(d, entry);
@@ -367,13 +466,15 @@ process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, u
     } else if (e->object_id != 0) {
         print_ptr("object", e->object_id);
     }
+
     /* 
      * process tracepoint args
      */
     for (i = 1; i < d->num_args; ++i) {
         if (i == 1) { /* print opcode & set cdw flags*/ 
-            opc = print_nvme_io_op(entry->args[i].integer);
-            set_op_flags(opc, &cdw10, &cdw11, &cdw12, &cdw13);
+            opc = set_opc_name(entry->args[i].integer, &opc_name);
+            printf("%-20.20s ", opc_name);
+            set_opc_flags(opc, &cdw10, &cdw11, &cdw12, &cdw13);
             rw_counter(opc, &read_cnt, &write_cnt);
             if (opc == NVME_OPC_FLUSH || 
                 opc == NVME_OPC_RESERVATION_REGISTER ||
@@ -400,7 +501,8 @@ process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, u
             else
                 print_ptr(nlb_str, entry->args[i].integer & UINT16BIT_MASK);
         } else if (i == 7 && cdw13) { /* zsa_8b || zra_8b */
-            print_zone_action (opc, entry->args[i].integer & UINT8BIT_MASK);
+            set_zone_act_name(opc, entry->args[i].integer & UINT8BIT_MASK, &zone_act_name);
+            printf("%-20.20s ", zone_act_name);
         } else {
             continue;
         }
@@ -409,7 +511,7 @@ process_submit_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, u
 }
 
 static void
-process_complete_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_offset)
+process_complete_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_base)
 {
     struct spdk_trace_entry		*e = entry->entry;
     const struct spdk_trace_tpoint	*d;
@@ -417,16 +519,18 @@ process_complete_entry(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate,
     size_t				i;
 
     d = &g_flags->tpoint[e->tpoint_id];
-    us = get_us_from_tsc(e->tsc - tsc_offset, tsc_rate);
+    us = get_us_from_tsc(e->tsc - tsc_base, tsc_rate);
 
     /* 
-     * print lcore & tsc_diff (us) 
+     * print lcore & tsc_base (us) 
      */
     printf("core%2d: %10.3f ", entry->lcore, us);
     if (g_print_tsc) {
-        printf("(%9ju) ", e->tsc - tsc_offset);
+        printf("(%9ju) ", e->tsc - tsc_base);
     }
-
+    
+    printf("  %-*s ", (int)sizeof(d->name), d->name);
+    
     if (d->new_object) {
         print_object_id(d, entry);
     } else if (d->object_type != OBJECT_NONE) {
@@ -463,7 +567,7 @@ usage(void)
     fprintf(stderr, "usage:\n");
     fprintf(stderr, "   %s <option> <lcore#>\n", g_exe_name);
     fprintf(stderr, "                 '-c' to display single lcore history\n");
-    fprintf(stderr, "                 '-t' to display TSC offset for each event\n");
+    fprintf(stderr, "                 '-t' to display TSC base for each event\n");
     fprintf(stderr, "                 '-s' to specify spdk_trace shm name for a\n");
     fprintf(stderr, "                      currently running process\n");
     fprintf(stderr, "                 '-i' to specify the shared memory ID\n");
@@ -480,20 +584,18 @@ main(int argc, char **argv)
     struct spdk_trace_parser_opts	opts;
     struct spdk_trace_parser_entry	entry;
     int				    lcore = SPDK_TRACE_MAX_LCORE;
-    uint64_t			tsc_offset, entry_count;
+    uint64_t			tsc_base, entry_count;
     const char			*app_name = NULL;
     const char			*file_name = NULL;
     int				    op, i;
+    FILE                *fptr;
+    char                output_file_name[68];    
     char				shm_name[64];
     int				    shm_id = -1, shm_pid = -1;
-    struct spdk_trace_entry     *e;
     const struct spdk_trace_tpoint	*d;
-    const char tp_io_submit[] = "NVME_IO_SUBMIT";
-    const char tp_io_complete[] = "NVME_IO_COMPLETE";
-
 
     g_exe_name = argv[0];
-    while ((op = getopt(argc, argv, "c:f:i:jp:s:t")) != -1) {
+    while ((op = getopt(argc, argv, "c:f:i:p:s:t")) != -1) {
         switch (op) {
         case 'c':
             lcore = atoi(optarg);
@@ -537,7 +639,20 @@ main(int argc, char **argv)
         exit(1);
     }
 
+    /* 
+     * output file name in ./ 
+     */       
+    if (!file_name) {
+        if (shm_id >= 0)
+            snprintf(output_file_name, sizeof(output_file_name), "%s_%d.bin", app_name, shm_id);
+        else
+            snprintf(output_file_name, sizeof(output_file_name), "%s_pid%d.bin", app_name, shm_pid);
+    } else
+        snprintf(output_file_name, sizeof(output_file_name), "%s.bin", file_name);
 
+    /* 
+     * file name in /dev/shm/ 
+     */
     if (!file_name) {
         if (shm_id >= 0) {
             snprintf(shm_name, sizeof(shm_name), "/%s_trace.%d", app_name, shm_id);
@@ -546,6 +661,13 @@ main(int argc, char **argv)
         }
         file_name = shm_name;
     }
+
+    fptr = fopen(output_file_name, "wb");
+    if (fptr == NULL) {
+        fprintf(stderr, "Failed to open output file %s\n", output_file_name);
+        return -1; 
+    }
+    printf("Output .bin file: %s\n", output_file_name);   
 
     opts.filename = file_name;
     opts.lcore = lcore;
@@ -568,27 +690,69 @@ main(int argc, char **argv)
         }
     }
 
-    tsc_offset = spdk_trace_parser_get_tsc_offset(g_parser);
-	
+	tsc_base = 0;
     while (spdk_trace_parser_next_entry(g_parser, &entry)) {
-        if (entry.entry->tsc < tsc_offset) {
-            continue;
-        }
-        e = entry.entry;
-        d = &g_flags->tpoint[e->tpoint_id];
+        d = &g_flags->tpoint[entry.entry->tpoint_id];
     
-        if (strcmp(d->name, tp_io_submit) != 0 && strcmp(d->name, tp_io_complete) != 0) {
+        if (strcmp(d->name, "NVME_IO_SUBMIT") != 0 && strcmp(d->name, "NVME_IO_COMPLETE") != 0) {
             continue;
-        } else if ((strcmp(d->name, tp_io_submit) == 0 || strcmp(d->name, tp_io_complete) == 0)
+        } else if ((strcmp(d->name, "NVME_IO_SUBMIT") == 0 || strcmp(d->name, "NVME_IO_COMPLETE") == 0)
                     && entry.args[0].integer) { 
             continue;   
         }
+        /* tsc_base = first io cmd entry */
+        if (!tsc_base) {
+            tsc_base = entry.entry->tsc;
+        }
+        
+        /* process io submit or io complete */
+        if (strcmp(d->name, "NVME_IO_SUBMIT") == 0)
+            process_submit_entry(&entry, g_flags->tsc_rate, tsc_base);
+        else if (strcmp(d->name, "NVME_IO_COMPLETE") == 0)
+            process_complete_entry(&entry, g_flags->tsc_rate, tsc_base);
+        
+        /* process output file */
+        if (output_file_name)
+            process_output_file(&entry, g_flags->tsc_rate, tsc_base, fptr);
 
-        if (strcmp(d->name, tp_io_submit) == 0)
-            process_submit_entry(&entry, g_flags->tsc_rate, tsc_offset);
-        else if (strcmp(d->name, tp_io_complete) == 0)
-            process_complete_entry(&entry, g_flags->tsc_rate, tsc_offset);
-    }   
+    }
+    printf("\noutput file entry: %d\n", output_file_entry);
+    fclose(fptr);
+
+    /*******/
+    size_t read_val;
+    struct output_file_data buffer[output_file_entry];
+    fptr = fopen(output_file_name, "rb");
+    if (fptr == NULL) {
+        fprintf(stderr, "Failed to open output file %s\n", output_file_name);
+        return -1; 
+    }
+    
+    read_val = fread(&buffer, sizeof(struct output_file_data), output_file_entry, fptr);
+    if (read_val != (size_t)output_file_entry)
+        fprintf(stderr, "Fail to read output file\n");
+
+    for (i = 0; i < output_file_entry; i++) {
+        printf("lcore: %d  ", buffer[i].lcore);
+        printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
+        printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
+        printf("obj_idx: %d  ", buffer[i].obj_idx);
+        printf("obj_id: %ld  ", buffer[i].obj_id);
+        printf("tsc_sc_time: %ld  ", buffer[i].tsc_sc_time);
+        printf("tpoint_name: %s  ", buffer[i].tpoint_name);
+        printf("opc_name: %s  ", buffer[i].opc_name);
+        printf("zone_act_name: %s  ", buffer[i].zone_act_name);
+        printf("nsid: %d  ", buffer[i].nsid);
+        printf("slba: %ld  ", buffer[i].slba);
+        printf("nlb: %d  ", buffer[i].nlb);
+        printf("nr: %d  ", buffer[i].nr);
+        printf("ndw: %d  ", buffer[i].ndw);
+        printf("cpl: %d  ", buffer[i].cpl);
+        printf("\n");
+    }
+    fclose(fptr);
+    /********/
+    
     printf("============================================================");
     printf("   TRACE ANALYSIS   ");
     printf("============================================================\n");
