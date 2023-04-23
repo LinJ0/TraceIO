@@ -1,1 +1,7 @@
 trace_io_replay
+
+# Prerequisites
+*.d
+
+# Object files
+*.o

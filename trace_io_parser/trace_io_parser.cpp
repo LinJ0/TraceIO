@@ -20,7 +20,6 @@ static const struct spdk_trace_flags *g_flags;
 static bool g_print_tsc = false;
 static uint64_t read_cnt = 0, write_cnt = 0;
 static float rw_ratio = 0.0;
-static int output_file_entry = 0;
 
 enum nvme_io_cmd_opc {
     NVME_OPC_FLUSH = 0x00,
@@ -324,7 +323,7 @@ rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
     }
 }
 
-struct output_file_data {
+struct bin_file_data {
     uint32_t lcore;
     uint64_t tsc_rate;
     uint64_t tsc_timestamp;
@@ -348,7 +347,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, ui
     struct spdk_trace_entry *e = entry->entry;
     const struct spdk_trace_tpoint  *d;
     size_t	i;
-    struct output_file_data buffer;
+    struct bin_file_data buffer;
     static int8_t opc;
     const char *opc_name;
     const char *zone_act_name;
@@ -366,6 +365,8 @@ process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, ui
     buffer.obj_id = e->object_id;
     if (!d->new_object && d->object_type != OBJECT_NONE && entry->object_index != UINT64_MAX) {
         buffer.tsc_sc_time = e->tsc - entry->object_start;
+    } else {
+        buffer.tsc_sc_time = 0;
     }
 
     strcpy(buffer.tpoint_name, d->name);
@@ -414,8 +415,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, ui
         }
     }
     
-    fwrite(&buffer, sizeof(struct output_file_data), 1, fptr);
-    output_file_entry++;
+    fwrite(&buffer, sizeof(struct bin_file_data), 1, fptr);
 }
 
 static void
@@ -566,16 +566,16 @@ usage(void)
 {
     fprintf(stderr, "usage:\n");
     fprintf(stderr, "   %s <option> <lcore#>\n", g_exe_name);
-    fprintf(stderr, "                 '-c' to display single lcore history\n");
-    fprintf(stderr, "                 '-t' to display TSC base for each event\n");
-    fprintf(stderr, "                 '-s' to specify spdk_trace shm name for a\n");
-    fprintf(stderr, "                      currently running process\n");
-    fprintf(stderr, "                 '-i' to specify the shared memory ID\n");
-    fprintf(stderr, "                 '-p' to specify the trace PID\n");
-    fprintf(stderr, "                      (If -s is specified, then one of\n");
-    fprintf(stderr, "                       -i or -p must be specified)\n");
-    fprintf(stderr, "                 '-f' to specify a tracepoint file name\n");
-    fprintf(stderr, "                      (-s and -f are mutually exclusive)\n");
+    fprintf(stderr, "         '-c' to display single lcore history\n");
+    fprintf(stderr, "         '-t' to display TSC base for each event\n");
+    fprintf(stderr, "         '-s' to specify spdk_trace shm name for a\n");
+    fprintf(stderr, "              currently running process\n");
+    fprintf(stderr, "         '-i' to specify the shared memory ID\n");
+    fprintf(stderr, "         '-p' to specify the trace PID\n");
+    fprintf(stderr, "              (If -s is specified, then one of\n");
+    fprintf(stderr, "               -i or -p must be specified)\n");
+    fprintf(stderr, "         '-f' to specify a tracepoint file name\n");
+    fprintf(stderr, "              (-s and -f are mutually exclusive)\n");
 }
 
 int
@@ -712,47 +712,12 @@ main(int argc, char **argv)
             process_complete_entry(&entry, g_flags->tsc_rate, tsc_base);
         
         /* process output file */
-        if (output_file_name)
+        if (fptr)
             process_output_file(&entry, g_flags->tsc_rate, tsc_base, fptr);
 
     }
-    printf("\noutput file entry: %d\n", output_file_entry);
     fclose(fptr);
 
-    /*******/
-    size_t read_val;
-    struct output_file_data buffer[output_file_entry];
-    fptr = fopen(output_file_name, "rb");
-    if (fptr == NULL) {
-        fprintf(stderr, "Failed to open output file %s\n", output_file_name);
-        return -1; 
-    }
-    
-    read_val = fread(&buffer, sizeof(struct output_file_data), output_file_entry, fptr);
-    if (read_val != (size_t)output_file_entry)
-        fprintf(stderr, "Fail to read output file\n");
-
-    for (i = 0; i < output_file_entry; i++) {
-        printf("lcore: %d  ", buffer[i].lcore);
-        printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-        printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
-        printf("obj_idx: %d  ", buffer[i].obj_idx);
-        printf("obj_id: %ld  ", buffer[i].obj_id);
-        printf("tsc_sc_time: %ld  ", buffer[i].tsc_sc_time);
-        printf("tpoint_name: %s  ", buffer[i].tpoint_name);
-        printf("opc_name: %s  ", buffer[i].opc_name);
-        printf("zone_act_name: %s  ", buffer[i].zone_act_name);
-        printf("nsid: %d  ", buffer[i].nsid);
-        printf("slba: %ld  ", buffer[i].slba);
-        printf("nlb: %d  ", buffer[i].nlb);
-        printf("nr: %d  ", buffer[i].nr);
-        printf("ndw: %d  ", buffer[i].ndw);
-        printf("cpl: %d  ", buffer[i].cpl);
-        printf("\n");
-    }
-    fclose(fptr);
-    /********/
-    
     printf("============================================================");
     printf("   TRACE ANALYSIS   ");
     printf("============================================================\n");
