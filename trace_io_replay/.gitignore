@@ -5,3 +5,5 @@ trace_io_replay
 
 # Object files
 *.o
+
+*.bin
