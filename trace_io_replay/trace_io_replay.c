@@ -37,15 +37,15 @@ struct bin_file_data {
     uint32_t obj_idx;
     uint64_t obj_id;
     uint64_t tsc_sc_time; /* object from submit to complete (us) */
-    char tpoint_name[32]; 
-    char opc_name[32];
-    char zone_act_name[32];
-    uint32_t nsid; /* namespace id*/
-    uint64_t slba; /* start logical block address */
-    uint32_t nlb; /* nlb_16b | nr_8b (copy) | ndw_32b (z_mgmt_recv) */
-    uint32_t nr;
-    uint32_t ndw;
-    uint32_t cpl; /* status code */
+    char     tpoint_name[32];       
+    uint16_t opc;
+    uint16_t cid;
+    uint32_t nsid;
+    uint32_t cpl;
+    uint32_t cdw10;
+    uint32_t cdw11;
+    uint32_t cdw12;
+    uint32_t cdw13;
 };
 
 static void
@@ -171,9 +171,9 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
     spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
     snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
 
-    while ((op = getopt(argc, argv, "i:")) != -1) {
+    while ((op = getopt(argc, argv, "f:")) != -1) {
         switch (op) {
-        case 'i':
+        case 'f':
             snprintf(file_name, file_name_size, "%s", optarg);
             break;
         default:
@@ -225,6 +225,7 @@ main(int argc, char **argv)
     fclose(fptr);
     /********************** process input file **************************/
     for (i = 0; i < entry_cnt; i++) {
+        printf("entry: %d  ", i);
         printf("lcore: %d  ", buffer[i].lcore);
         printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
         printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
@@ -232,16 +233,16 @@ main(int argc, char **argv)
         printf("obj_id: %ld  ", buffer[i].obj_id);
         printf("tsc_sc_time: %ld  ", buffer[i].tsc_sc_time);
         printf("tpoint_name: %s  ", buffer[i].tpoint_name);
-        printf("opc_name: %s  ", buffer[i].opc_name);
-        printf("zone_act_name: %s  ", buffer[i].zone_act_name);
+        printf("opc: %d  ", buffer[i].opc);
+        printf("cid: %d  ", buffer[i].cid);
         printf("nsid: %d  ", buffer[i].nsid);
-        printf("slba: %ld  ", buffer[i].slba);
-        printf("nlb: %d  ", buffer[i].nlb);
-        printf("nr: %d  ", buffer[i].nr);
-        printf("ndw: %d  ", buffer[i].ndw);
         printf("cpl: %d  ", buffer[i].cpl);
+        printf("cdw10: %d  ", buffer[i].cdw10);
+        printf("cdw11: %d  ", buffer[i].cdw11);
+        printf("cdw12: %d  ", buffer[i].cdw12);
+        printf("cdw13: %d  ", buffer[i].cdw13);
         printf("\n");
-    }
+    }   
     /********************** process input file **************************/
 
     spdk_env_opts_init(&env_opts);

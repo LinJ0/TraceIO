@@ -54,14 +54,14 @@ struct bin_file_data {
     uint64_t obj_id;
     uint64_t tsc_sc_time; /* object from submit to complete (us) */
     char     tpoint_name[32];
-    uint16_t opc = 0;
-    uint16_t cid = 0;
-    uint32_t nsid = 0;
-    uint32_t cpl = 0;
-    uint32_t cdw10 = 0;
-    uint32_t cdw11 = 0;
-    uint32_t cdw12 = 0;
-    uint32_t cdw13 = 0;
+    uint16_t opc;
+    uint16_t cid;
+    uint32_t nsid;
+    uint32_t cpl;
+    uint32_t cdw10;
+    uint32_t cdw11;
+    uint32_t cdw12;
+    uint32_t cdw13;
 };
 
 static void
