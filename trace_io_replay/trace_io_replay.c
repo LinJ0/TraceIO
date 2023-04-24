@@ -193,7 +193,7 @@ main(int argc, char **argv)
     char input_file_name[68];
     FILE *fptr;
     int file_size;
-    int entry_size;
+    int entry_cnt;
     size_t read_val;
     
     /*
@@ -214,17 +214,17 @@ main(int argc, char **argv)
     fseek(fptr, 0, SEEK_END);
     file_size = ftell(fptr);
     rewind(fptr);
-    entry_size = file_size / sizeof(struct bin_file_data);
+    entry_cnt = file_size / sizeof(struct bin_file_data);
 
-    struct bin_file_data buffer[entry_size];    
+    struct bin_file_data buffer[entry_cnt];    
  
-    read_val = fread(&buffer, sizeof(struct bin_file_data), entry_size, fptr);
-    if (read_val != (size_t)entry_size)
+    read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
+    if (read_val != (size_t)entry_cnt)
         fprintf(stderr, "Fail to read input file\n");
     
     fclose(fptr);
     /********************** process input file **************************/
-    for (i = 0; i < entry_size; i++) {
+    for (i = 0; i < entry_cnt; i++) {
         printf("lcore: %d  ", buffer[i].lcore);
         printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
         printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
