@@ -1,7 +1,9 @@
-trace_io_parser
+trace_io_analysis
 
 # Prerequisites
 *.d
 
 # Object files
 *.o
+
+*.bin
