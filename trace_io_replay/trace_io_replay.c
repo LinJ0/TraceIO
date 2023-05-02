@@ -98,50 +98,46 @@ static void
 attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts)
 {
-	int nsid;
-	struct ctrlr_entry *entry;
-	struct spdk_nvme_ns *ns;
-	const struct spdk_nvme_ctrlr_data *cdata;
+    int nsid;
+    struct ctrlr_entry *entry;
+    struct spdk_nvme_ns *ns;
+    const struct spdk_nvme_ctrlr_data *cdata;
 
-	entry = (struct ctrlr_entry *)malloc(sizeof(struct ctrlr_entry));
-	if (entry == NULL) {
-		perror("ctrlr_entry malloc");
-		exit(1);
-	}
+    entry = (struct ctrlr_entry *)malloc(sizeof(struct ctrlr_entry));
+    if (entry == NULL) {
+        perror("ctrlr_entry malloc");
+        exit(1);
+    }
 
-	printf("Attached to %s\n", trid->traddr);
+    printf("Attached to %s\n", trid->traddr);
 
-	/*
-	 * spdk_nvme_ctrlr is the logical abstraction in SPDK for an NVMe
-	 *  controller.  During initialization, the IDENTIFY data for the
-	 *  controller is read using an NVMe admin command, and that data
-	 *  can be retrieved using spdk_nvme_ctrlr_get_data() to get
-	 *  detailed information on the controller.  Refer to the NVMe
-	 *  specification for more details on IDENTIFY for NVMe controllers.
-	 */
-	cdata = spdk_nvme_ctrlr_get_data(ctrlr);
+    /*
+     * spdk_nvme_ctrlr is the logical abstraction in SPDK for an NVMe
+     * controller.  During initialization, the IDENTIFY data for the
+     * controller is read using an NVMe admin command, and that data
+     * can be retrieved using spdk_nvme_ctrlr_get_data() to get
+     * detailed information on the controller.  Refer to the NVMe
+     * specification for more details on IDENTIFY for NVMe controllers.
+     */
+    cdata = spdk_nvme_ctrlr_get_data(ctrlr);
 
-	snprintf(entry->name, sizeof(entry->name), "%-20.20s (%-20.20s)", cdata->mn, cdata->sn);
+    snprintf(entry->name, sizeof(entry->name), "%-20.20s (%-20.20s)", cdata->mn, cdata->sn);
 
-	entry->ctrlr = ctrlr;
-	TAILQ_INSERT_TAIL(&g_controllers, entry, link);
+    entry->ctrlr = ctrlr;
+    TAILQ_INSERT_TAIL(&g_controllers, entry, link);
 
-	/*
-	 * Each controller has one or more namespaces.  An NVMe namespace is basically
-	 *  equivalent to a SCSI LUN.  The controller's IDENTIFY data tells us how
-	 *  many namespaces exist on the controller.  For Intel(R) P3X00 controllers,
-	 *  it will just be one namespace.
-	 *
-	 * Note that in NVMe, namespace IDs start at 1, not 0.
-	 */
-	for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr); nsid != 0;
-	     nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, nsid)) {
-		ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
-		if (ns == NULL) {
-			continue;
-		}
-		register_ns(ctrlr, ns);
-	}
+    /*
+     * Each controller has one or more namespaces.
+     * Note that in NVMe, namespace IDs start at 1, not 0.
+     */
+    for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr); nsid != 0;
+        nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, nsid)) {
+        ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+        if (ns == NULL) {
+            continue;
+        }
+        register_ns(ctrlr, ns);
+    }
 }
 
 static void
@@ -178,9 +174,6 @@ struct io_seq
 static void
 identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 {
-    if (spdk_nvme_ns_get_csi(ns) != SPDK_NVME_CSI_ZNS) {
-        return;
-    }
     uint64_t num_zones = spdk_nvme_zns_ns_get_num_zones(ns);
     uint64_t zone_size = spdk_nvme_zns_ns_get_zone_size(ns);
     uint32_t zone_append_size_limit = spdk_nvme_zns_ctrlr_get_max_zone_append_size(ctrlr);
@@ -192,6 +185,7 @@ identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
     printf("size of zone: %lu (%lu * %lu)\n", zone_size, ref_ns_zns_data->lbafe->zsze, ref_ns_data->nsze);
     printf("size of lBA: %lu\n", ref_ns_data->nsze);
     printf("max zone append size: %u\n", zone_append_size_limit);
+    printf("\n");
 }
 
 /*
@@ -200,11 +194,11 @@ identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 static void
 get_zns_zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
-	if (spdk_nvme_cpl_is_error(cpl)) {
-		printf("get zns zone report failed\n");
-	}
+    if (spdk_nvme_cpl_is_error(cpl)) {
+        printf("get zns zone report failed\n");
+    }
 
-	outstanding_commands--;
+    outstanding_commands--;
 }
 
 static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
@@ -261,104 +255,127 @@ static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
     }
 }
 
-static void report_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
-{
-	const struct spdk_nvme_ns_data *nsdata;
-	const struct spdk_nvme_zns_ns_data *nsdata_zns;
-	uint8_t *report_buf;
-	size_t report_bufsize;
-	uint64_t zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns);
-	uint64_t total_zones = spdk_nvme_zns_ns_get_num_zones(ns);
-	//uint64_t max_zones_per_buf;
-    uint64_t zones_to_print, i;
-	uint64_t handled_zones = 0;
-	uint64_t slba = 0;
-	size_t zdes = 0;
-	//uint32_t zds, zrs;
-    uint32_t format_index;
-	int rc = 0;
-    
-	outstanding_commands = 0;
-
-	nsdata = spdk_nvme_ns_get_data(ns);
-	nsdata_zns = spdk_nvme_zns_ns_get_data(ns);
-
-	//zrs = sizeof(struct spdk_nvme_zns_zone_report);
-	//zds = sizeof(struct spdk_nvme_zns_zone_desc);
-
-	format_index = spdk_nvme_ns_get_format_index(nsdata);
-	zdes = nsdata_zns->lbafe[format_index].zdes * 64;
-
-	report_bufsize = spdk_nvme_ns_get_max_io_xfer_size(ns);
-    report_buf = calloc(1, report_bufsize);
-	if (!report_buf) {
-		printf("Zone report allocation failed!\n");
-		exit(1);
-	}
-
-	zones_to_print = g_zone_report_limit ? spdk_min(total_zones, (uint64_t)g_zone_report_limit) : \
-			 total_zones;
-    
-	print_uline('=', printf("NVMe ZNS Zone Report (first %zu of %zu)\n", zones_to_print, total_zones));
-
-	while (handled_zones < zones_to_print) {
-		memset(report_buf, 0, report_bufsize);
-
-		if (zdes) {
-			//max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
-            rc = spdk_nvme_zns_ext_report_zones(ns, qpair, report_buf, report_bufsize,
-							    slba, SPDK_NVME_ZRA_LIST_ALL, true,
-							    get_zns_zone_report_completion, NULL);
-		} else {
-			//max_zones_per_buf = (report_bufsize - zrs) / zds;
-			rc = spdk_nvme_zns_report_zones(ns, qpair, report_buf, report_bufsize,
-							slba, SPDK_NVME_ZRA_LIST_ALL, true,
-							get_zns_zone_report_completion, NULL);
-		}
-
-		if (rc) {
-			fprintf(stderr, "Report zones failed\n");
-			exit(1);
-		} else {
-			outstanding_commands++;
-		}
-
-		while (outstanding_commands) {
-			spdk_nvme_qpair_process_completions(qpair, 0);
-		}
-
-		for (i = 0; handled_zones < zones_to_print; i++) {
-            print_zns_zone(report_buf, i, zdes);
-			slba += zone_size_lba;
-			handled_zones++;
-		}
-		printf("\n");
-	}
-
-	free(report_buf);
-}
-/*
- * report zone end 
- */
-
-static void
-process_replay(void)
+static void report_zone(void)
 {
     struct ns_entry *ns_entry;
-    struct io_seq seq;
-    //int rc;
-    size_t sz;
-    
-    /* specify namespace and allocate io qpair for the namespace*/
+    const struct spdk_nvme_ns_data *nsdata;
+    const struct spdk_nvme_zns_ns_data *nsdata_zns;
+    uint8_t *report_buf;
+    size_t report_bufsize;
+    uint64_t zone_size_lba;
+    uint64_t total_zones;
+    //uint64_t max_zones_per_buf;
+    uint64_t zones_to_print, i;
+    uint64_t handled_zones = 0;
+    uint64_t slba = 0;
+    size_t zdes = 0;
+    //uint32_t zds, zrs;
+    uint32_t format_index;
+    int rc = 0;
+   
     ns_entry = TAILQ_FIRST(&g_namespaces);
+    
+    if (spdk_nvme_ns_get_csi(ns_entry->ns) != SPDK_NVME_CSI_ZNS) {
+        return;
+    }
+
+    identify_zns_info(ns_entry->ctrlr, ns_entry->ns);
+    zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
+    total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
+
+    /* specify namespace and allocate io qpair for the namespace*/
     ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
     if (ns_entry->qpair == NULL) {
         printf("ERROR: spdk_nvme_ctrlr_alloc_io_qpair() failed\n");
         return;
     }
 
-    /* allocate a 4KB zeroed buffer which is required for data buffers 
-     * used for SPDK NVMe I/O operations*/
+    nsdata = spdk_nvme_ns_get_data(ns_entry->ns);
+    nsdata_zns = spdk_nvme_zns_ns_get_data(ns_entry->ns);
+
+    //zrs = sizeof(struct spdk_nvme_zns_zone_report);
+    //zds = sizeof(struct spdk_nvme_zns_zone_desc);
+
+    format_index = spdk_nvme_ns_get_format_index(nsdata);
+    zdes = nsdata_zns->lbafe[format_index].zdes * 64;
+
+    report_bufsize = spdk_nvme_ns_get_max_io_xfer_size(ns_entry->ns);
+    report_buf = calloc(1, report_bufsize);
+    if (!report_buf) {
+        printf("Zone report allocation failed!\n");
+        exit(1);
+    }
+
+    zones_to_print = g_zone_report_limit ? spdk_min(total_zones, (uint64_t)g_zone_report_limit) : \
+	                total_zones;
+    
+    print_uline('=', printf("NVMe ZNS Zone Report (first %zu of %zu)\n", zones_to_print, total_zones));
+
+    outstanding_commands = 0;
+    while (handled_zones < zones_to_print) {
+        memset(report_buf, 0, report_bufsize);
+
+        if (zdes) {
+            //max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
+            rc = spdk_nvme_zns_ext_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true,
+                            get_zns_zone_report_completion, NULL);
+        } else {
+            //max_zones_per_buf = (report_bufsize - zrs) / zds;
+            rc = spdk_nvme_zns_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true,
+                            get_zns_zone_report_completion, NULL);
+        }
+
+        if (rc) {
+            fprintf(stderr, "Report zones failed\n");
+            exit(1);
+        } else {
+            outstanding_commands++;
+        }
+
+        while (outstanding_commands) {
+            spdk_nvme_qpair_process_completions(ns_entry->qpair, 0);
+        }
+
+        for (i = 0; handled_zones < zones_to_print; i++) {
+            print_zns_zone(report_buf, i, zdes);
+            slba += zone_size_lba;
+            handled_zones++;
+        }
+        printf("\n");
+    }
+
+    free(report_buf);
+    spdk_nvme_ctrlr_free_io_qpair(ns_entry->qpair);
+}
+/*
+ * report zone end 
+ */
+
+static int
+process_replay(struct bin_file_data *b)
+{
+    struct ns_entry *ns_entry;
+    struct io_seq seq;
+    int rc;
+    size_t sz;
+    
+    printf("opc: %d  \n", b->opc);
+    
+    /* specify namespace and allocate io qpair for the namespace*/
+    ns_entry = TAILQ_FIRST(&g_namespaces);
+    ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
+    if (ns_entry->qpair == NULL) {
+        printf("ERROR: spdk_nvme_ctrlr_alloc_io_qpair() failed\n");
+        rc = -1;
+        return rc;
+    }
+
+    /*
+     * allocate a 4KB zeroed buffer which is required for data buffers 
+     * used for SPDK NVMe I/O operations
+     */
     seq.using_cmb_io = 1;
     seq.buf = spdk_nvme_ctrlr_map_cmb(ns_entry->ctrlr, &sz);
     if (seq.buf == NULL || sz < 0x1000) {
@@ -367,7 +384,8 @@ process_replay(void)
     }
     if (seq.buf == NULL) {
         printf("ERROR: write buffer allocation failed\n");
-        return;
+        rc = -1;
+        return rc;
     }
     if (seq.using_cmb_io) {
         printf("INFO: using controller memory buffer for IO\n");
@@ -380,20 +398,14 @@ process_replay(void)
     /* reset zone before write */
     if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
         //reset_zone_and_wait_for_completion(&seq);
-        printf("ZNS~~\n");
+        printf("I will delete this later...\n");
     }
     
     // to do replay....
 
     spdk_free(seq.buf);
-
-    /* report zone */
-    if (g_report_zone) {
-        identify_zns_info(ns_entry->ctrlr, ns_entry->ns);
-        report_zone(ns_entry->ns, ns_entry->qpair);
-    } 
-
     spdk_nvme_ctrlr_free_io_qpair(ns_entry->qpair);
+    return 0;
 }
 
 static void
@@ -486,27 +498,6 @@ main(int argc, char **argv)
         fprintf(stderr, "Fail to read input file\n");
     
     fclose(fptr);
-    /********************** process input file **************************/
-    for (i = 0; i < entry_cnt; i++) {
-        printf("entry: %d  ", i);
-        printf("lcore: %d  ", buffer[i].lcore);
-        printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-        printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
-        printf("obj_idx: %d  ", buffer[i].obj_idx);
-        printf("obj_id: %ld  ", buffer[i].obj_id);
-        printf("tsc_sc_time: %ld  ", buffer[i].tsc_sc_time);
-        printf("tpoint_name: %s  ", buffer[i].tpoint_name);
-        printf("opc: %d  ", buffer[i].opc);
-        printf("cid: %d  ", buffer[i].cid);
-        printf("nsid: %d  ", buffer[i].nsid);
-        printf("cpl: %d  ", buffer[i].cpl);
-        printf("cdw10: %d  ", buffer[i].cdw10);
-        printf("cdw11: %d  ", buffer[i].cdw11);
-        printf("cdw12: %d  ", buffer[i].cdw12);
-        printf("cdw13: %d  ", buffer[i].cdw13);
-        printf("\n");
-    }   
-    /********************** process input file **************************/
 
     spdk_env_opts_init(&env_opts);
     env_opts.name = "trace_io_replay";
@@ -532,12 +523,23 @@ main(int argc, char **argv)
     
     start_tsc = spdk_get_ticks();
 
-    process_replay();
+    for (i = 0; i < entry_cnt; i++) {
+        rc = process_replay(&buffer[i]);
+        if (rc != 0) {
+            fprintf(stderr, "process_replay() failed\n");
+            rc = 1;
+            goto exit;
+        }
+    }
 
     end_tsc = spdk_get_ticks();
     tsc_diff = end_tsc - start_tsc;
     printf("Total time: %ju\n", tsc_diff);
-    
+   
+    if (g_report_zone) {
+        report_zone();
+    }
+ 
     exit:
     cleanup();
     spdk_env_fini();
