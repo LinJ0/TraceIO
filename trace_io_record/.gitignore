@@ -1,4 +1,4 @@
-trace_io_replay
+trace_io_record
 
 # Prerequisites
 *.d
