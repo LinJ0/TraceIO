@@ -8,10 +8,7 @@
 #include "spdk/vmd.h"
 #include "spdk/nvme_zns.h"
 #include "spdk/log.h"
-
-#define UINT8BIT_MASK 0xFF
-#define UINT16BIT_MASK 0xFFFF
-#define UINT32BIT_MASK 0xFFFFFFFF
+#include "../lib/trace_io.h"
 
 struct ctrlr_entry {
 	struct spdk_nvme_ctrlr		*ctrlr;
@@ -34,25 +31,7 @@ static bool g_report_zone = false;
 static uint64_t g_zone_report_limit = 0;
 static int outstanding_commands;
 
-struct bin_file_data {
-    uint32_t lcore;
-    uint64_t tsc_rate;
-    uint64_t tsc_timestamp;
-    uint32_t obj_idx;
-    uint64_t obj_id;
-    uint64_t tsc_sc_time; /* object from submit to complete (us) */
-    char     tpoint_name[32];       
-    uint16_t opc;
-    uint16_t cid;
-    uint32_t nsid;
-    uint32_t cpl;
-    uint32_t cdw10;
-    uint32_t cdw11;
-    uint32_t cdw12;
-    uint32_t cdw13;
-};
-
-/* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */                                                                                                                        
+/* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */
 static void
 print_uline(char marker, int line_len)
 {
@@ -163,14 +142,7 @@ cleanup(void)
     }
 }
 
-struct io_seq
-{
-    struct ns_entry *ns_entry;
-    char *buf;
-    unsigned using_cmb_io;
-    int is_completed;
-};
-
+/* report zone start */
 static void
 identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 {
@@ -188,9 +160,6 @@ identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
     printf("\n");
 }
 
-/*
- * report zone start 
- */
 static void
 get_zns_zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
@@ -203,14 +172,11 @@ get_zns_zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 
 static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
 {
-    struct spdk_nvme_zns_zone_desc *desc;
-    uint32_t i, zds, zrs, zd_index;
+    uint32_t zrs = sizeof(struct spdk_nvme_zns_zone_report);
+    uint32_t zds = sizeof(struct spdk_nvme_zns_zone_desc);
+    uint32_t zd_index = zrs + index * (zds + zdes);
 
-    zrs = sizeof(struct spdk_nvme_zns_zone_report);
-    zds = sizeof(struct spdk_nvme_zns_zone_desc);
-    zd_index = zrs + index * (zds + zdes);
-
-    desc = (struct spdk_nvme_zns_zone_desc *)(report + zd_index);
+    struct spdk_nvme_zns_zone_desc *desc = (struct spdk_nvme_zns_zone_desc *)(report + zd_index);
 
     printf("ZSLBA: 0x%-18" PRIx64 " ZCAP: 0x%-18" PRIx64 " WP: 0x%-18" PRIx64 " ZS: ", desc->zslba,
            desc->zcap, desc->wp);
@@ -248,7 +214,7 @@ static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
         return;
     }
 
-    for (i = 0; i < zdes; i += 8)
+    for (int i = 0; i < (int)zdes; i += 8)
     {
         printf("zone_desc_ext[%d] : 0x%" PRIx64 "\n", i,
                *(uint64_t *)(report + zd_index + zds + i));
@@ -257,71 +223,59 @@ static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
 
 static void report_zone(void)
 {
-    struct ns_entry *ns_entry;
-    const struct spdk_nvme_ns_data *nsdata;
-    const struct spdk_nvme_zns_ns_data *nsdata_zns;
-    uint8_t *report_buf;
-    size_t report_bufsize;
-    uint64_t zone_size_lba;
-    uint64_t total_zones;
-    //uint64_t max_zones_per_buf;
-    uint64_t zones_to_print, i;
-    uint64_t handled_zones = 0;
-    uint64_t slba = 0;
-    size_t zdes = 0;
-    //uint32_t zds, zrs;
-    uint32_t format_index;
     int rc = 0;
    
-    ns_entry = TAILQ_FIRST(&g_namespaces);
+    struct ns_entry *ns_entry = TAILQ_FIRST(&g_namespaces);
     
     if (spdk_nvme_ns_get_csi(ns_entry->ns) != SPDK_NVME_CSI_ZNS) {
         return;
     }
 
     identify_zns_info(ns_entry->ctrlr, ns_entry->ns);
-    zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
-    total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
+    uint64_t zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
+    uint64_t total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
 
-    /* specify namespace and allocate io qpair for the namespace*/
+    /* specify namespace and allocate io qpair for the namespace */
     ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
     if (ns_entry->qpair == NULL) {
         printf("ERROR: spdk_nvme_ctrlr_alloc_io_qpair() failed\n");
         return;
     }
 
-    nsdata = spdk_nvme_ns_get_data(ns_entry->ns);
-    nsdata_zns = spdk_nvme_zns_ns_get_data(ns_entry->ns);
+    const struct spdk_nvme_ns_data *nsdata = spdk_nvme_ns_get_data(ns_entry->ns);
+    const struct spdk_nvme_zns_ns_data *nsdata_zns = spdk_nvme_zns_ns_get_data(ns_entry->ns);
 
-    //zrs = sizeof(struct spdk_nvme_zns_zone_report);
-    //zds = sizeof(struct spdk_nvme_zns_zone_desc);
+    //uint32_t zrs = sizeof(struct spdk_nvme_zns_zone_report);
+    //uint32_t zds = sizeof(struct spdk_nvme_zns_zone_desc);
 
-    format_index = spdk_nvme_ns_get_format_index(nsdata);
-    zdes = nsdata_zns->lbafe[format_index].zdes * 64;
+    uint32_t format_index = spdk_nvme_ns_get_format_index(nsdata);
+    size_t zdes = nsdata_zns->lbafe[format_index].zdes * 64;
 
-    report_bufsize = spdk_nvme_ns_get_max_io_xfer_size(ns_entry->ns);
-    report_buf = calloc(1, report_bufsize);
+    size_t report_bufsize = spdk_nvme_ns_get_max_io_xfer_size(ns_entry->ns);
+    uint8_t *report_buf = calloc(1, report_bufsize);
     if (!report_buf) {
         printf("Zone report allocation failed!\n");
         exit(1);
     }
 
-    zones_to_print = g_zone_report_limit ? spdk_min(total_zones, (uint64_t)g_zone_report_limit) : \
+    uint64_t zones_to_print = g_zone_report_limit ? spdk_min(total_zones, (uint64_t)g_zone_report_limit) : \
 	                total_zones;
     
     print_uline('=', printf("NVMe ZNS Zone Report (first %zu of %zu)\n", zones_to_print, total_zones));
 
     outstanding_commands = 0;
+    uint64_t handled_zones = 0;
+    uint64_t slba = 0;
     while (handled_zones < zones_to_print) {
         memset(report_buf, 0, report_bufsize);
 
         if (zdes) {
-            //max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
+            //uint64_t max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
             rc = spdk_nvme_zns_ext_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
                             slba, SPDK_NVME_ZRA_LIST_ALL, true,
                             get_zns_zone_report_completion, NULL);
         } else {
-            //max_zones_per_buf = (report_bufsize - zrs) / zds;
+            //uint64_t max_zones_per_buf = (report_bufsize - zrs) / zds;
             rc = spdk_nvme_zns_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
                             slba, SPDK_NVME_ZRA_LIST_ALL, true,
                             get_zns_zone_report_completion, NULL);
@@ -338,7 +292,7 @@ static void report_zone(void)
             spdk_nvme_qpair_process_completions(ns_entry->qpair, 0);
         }
 
-        for (i = 0; handled_zones < zones_to_print; i++) {
+        for (int i = 0; handled_zones < zones_to_print; i++) {
             print_zns_zone(report_buf, i, zdes);
             slba += zone_size_lba;
             handled_zones++;
@@ -349,9 +303,15 @@ static void report_zone(void)
     free(report_buf);
     spdk_nvme_ctrlr_free_io_qpair(ns_entry->qpair);
 }
-/*
- * report zone end 
- */
+/* report zone end */
+
+struct io_seq
+{
+    struct ns_entry *ns_entry;
+    char *buf;
+    unsigned using_cmb_io;
+    int is_completed;
+};
 
 static int
 process_replay(struct bin_file_data *b)
@@ -361,9 +321,7 @@ process_replay(struct bin_file_data *b)
     int rc;
     size_t sz;
     
-    printf("opc: %d  \n", b->opc);
-    
-    /* specify namespace and allocate io qpair for the namespace*/
+    /* specify namespace and allocate io qpair for the namespace */
     ns_entry = TAILQ_FIRST(&g_namespaces);
     ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
     if (ns_entry->qpair == NULL) {
@@ -425,9 +383,6 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
 {
     int op;
 
-    spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
-    snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
-
     while ((op = getopt(argc, argv, "f:zn:")) != -1) {
         switch (op) {
         case 'f':
@@ -461,10 +416,10 @@ main(int argc, char **argv)
     int entry_cnt;
     size_t read_val;
     
-    /*
-     * Get the input file name.
-     */
+    spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
+    snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
     
+    /* Get the input file name */
     rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
     if (rc != 0) {
         return rc;

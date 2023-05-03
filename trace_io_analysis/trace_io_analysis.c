@@ -4,91 +4,11 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/file.h"
-
-#define UINT8BIT_MASK 0xFF
-#define UINT16BIT_MASK 0xFFFF
-#define UINT32BIT_MASK 0xFFFFFFFF
-
-struct bin_file_data {
-    uint32_t lcore;
-    uint64_t tsc_rate;
-    uint64_t tsc_timestamp;
-    uint32_t obj_idx;
-    uint64_t obj_id;
-    uint64_t tsc_sc_time; /* object from submit to complete (us) */
-    char     tpoint_name[32];       
-    uint16_t opc;
-    uint16_t cid;
-    uint32_t nsid;
-    uint32_t cpl;
-    uint32_t cdw10;
-    uint32_t cdw11;
-    uint32_t cdw12;
-    uint32_t cdw13;
-};
-
-enum nvme_io_cmd_opc {
-    NVME_OPC_FLUSH = 0x00,
-    NVME_OPC_WRITE = 0x01,
-    NVME_OPC_READ = 0x02,
-    NVME_OPC_WRITE_UNCORRECTABLE = 0x04,
-    NVME_OPC_COMPARE = 0x05,
-    NVME_OPC_WRITE_ZEROES = 0x08,
-    NVME_OPC_DATASET_MANAGEMENT = 0x09,
-    NVME_OPC_VERIFY = 0x0C,
-    NVME_OPC_RESERVATION_REGISTER = 0x0D,
-    NVME_OPC_RESERVATION_REPORT = 0x0E,
-    NVME_OPC_RESERVATION_ACQUIRE = 0x11,
-    NVME_OPC_RESERVATION_RELEASE = 0x15,
-    NVME_OPC_COPY = 0x19,
-    NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND = 0x79,
-    NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV = 0x7A,
-    NVME_ZNS_OPC_ZONE_APPEND = 0x7D,
-};
-
-enum nvme_zns_mgmt_send_action {
-    NVME_ZNS_MGMT_SEND_ACTION_OPEN = 0x01,
-    NVME_ZNS_MGMT_SEND_ACTION_CLOSE = 0x02,
-    NVME_ZNS_MGMT_SEND_ACTION_FINISH = 0x03,
-    NVME_ZNS_MGMT_SEND_ACTION_RESET = 0x04,
-    NVME_ZNS_MGMT_SEND_ACTION_OFFLINE = 0x05,
-};
-
-enum nvme_zns_mgmt_recv_action {
-    NVME_ZNS_MGMT_RECV_ACTION_REPORT_ZONES = 0x00,
-    NVME_ZNS_MGMT_RECV_ACTION_EXTENDED_REPORT_ZONES = 0x01,
-};
+#include "../lib/trace_io.h"
 
 static bool g_print_tsc = false;
 static bool g_print_io = false;
 static bool g_input_file = false;
-
-/* This is a bit ugly, but we don't want to include env_dpdk in the app, while spdk_util, which we
- * do need, uses some of the functions implemented there.  We're not actually using the functions
- * that depend on those, so just define them as no-ops to allow the app to link.
- */
-/*
-extern "C" {
-    void *
-    spdk_realloc(void *buf, size_t size, size_t align)
-    {
-        assert(false);
-        return NULL;
-    }
-
-    void
-    spdk_free(void *buf)
-    {
-        assert(false);
-    }
-
-    uint64_t
-	spdk_get_ticks(void)
-    {
-        return 0;
-    }
-}*/ 
-/* extern "C" */
 
 static float
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
@@ -103,6 +23,16 @@ format_argname(const char *name)
 
     snprintf(namebuf, sizeof(namebuf), "%s: ", name);
     return namebuf;
+}
+
+/* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */                                                                                                                        
+static void
+print_uline(char marker, int line_len)
+{
+    for (int i = 1; i < line_len; ++i) {
+        putchar(marker);
+    }   
+    putchar('\n');
 }
 
 static void
@@ -261,8 +191,25 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
     }
 }
 
-static uint64_t read_cnt = 0, write_cnt = 0;
-static float rw_ratio = 0.0;
+static float g_latency_min = 0.0;
+static float g_latency_max = 0.0;
+static float g_latency_total = 0.0;
+static float g_latency_avg = 0.0;
+
+static int
+us_latency(uint64_t tsc_sc_time, uint64_t tsc_rate, float *max, float *min, float *total)
+{
+    int rc = 0;
+    float us_sc_time = get_us_from_tsc(tsc_sc_time, tsc_rate);
+    
+    *max = (us_sc_time > *max) ? us_sc_time : *max;
+    *min = (*min == 0 || us_sc_time < *min) ? us_sc_time : *min;
+    *total += us_sc_time;
+    return rc;
+}
+
+static uint64_t g_read_cnt = 0, g_write_cnt = 0;
+static float g_rw_ratio = 0.0;
 
 static int
 rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
@@ -309,7 +256,17 @@ process_entry (struct bin_file_data *d)
     bool cdw13 = false;
     uint64_t slba = 0;
 
-    rc = rw_counter(d->opc, &read_cnt, &write_cnt);
+    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
+    if (rc) {
+        return rc;
+    }
+
+    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
+        rc = us_latency(d->tsc_sc_time, d->tsc_rate, &g_latency_max, &g_latency_min, &g_latency_total);
+        if (rc) {
+            return rc;
+        }
+    }
 
     /* 
      * print lcore & tsc_base (us) & tpoint name & object id
@@ -484,13 +441,14 @@ main(int argc, char **argv)
         }
     }
 
-    printf("============================================================");
-    printf("   TRACE ANALYSIS   ");
-    printf("============================================================\n");
-    rw_ratio = (read_cnt + write_cnt) ? (read_cnt * 100) / (read_cnt + write_cnt) : 0;
-    printf("READ: %-20jd  WRITE: %-20jd  R/W: %20.3f%%\n", read_cnt, write_cnt, rw_ratio);
+    print_uline('=', printf("\nTrace Analysis\n")); 
+    g_rw_ratio = (g_read_cnt + g_write_cnt) ? (g_read_cnt * 100) / (g_read_cnt + g_write_cnt) : 0;
+    g_latency_avg = (g_read_cnt + g_write_cnt) ? g_latency_total / (g_read_cnt + g_write_cnt) : 0;
+    printf("%-15s  ", "Access pattern");
+    printf("READ:  %-20jd WRITE: %-20jd R/W: %18.3f %%\n", g_read_cnt, g_write_cnt, g_rw_ratio);
+    printf("%-15s  ", "Latency (us)");
+    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %20.3f\n", g_latency_min, g_latency_max, g_latency_avg);
 
     spdk_env_fini();
     return 0;
 }
-
