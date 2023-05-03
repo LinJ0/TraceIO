@@ -166,7 +166,6 @@ get_zns_zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
     if (spdk_nvme_cpl_is_error(cpl)) {
         printf("get zns zone report failed\n");
     }
-
     outstanding_commands--;
 }
 
@@ -272,13 +271,11 @@ static void report_zone(void)
         if (zdes) {
             //uint64_t max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
             rc = spdk_nvme_zns_ext_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
-                            slba, SPDK_NVME_ZRA_LIST_ALL, true,
-                            get_zns_zone_report_completion, NULL);
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true, get_zns_zone_report_completion, NULL);
         } else {
             //uint64_t max_zones_per_buf = (report_bufsize - zrs) / zds;
             rc = spdk_nvme_zns_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
-                            slba, SPDK_NVME_ZRA_LIST_ALL, true,
-                            get_zns_zone_report_completion, NULL);
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true, get_zns_zone_report_completion, NULL);
         }
 
         if (rc) {
@@ -305,21 +302,38 @@ static void report_zone(void)
 }
 /* report zone end */
 
-struct io_seq
+/* replay workload start */
+static void
+reset_zone_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
-    struct ns_entry *ns_entry;
-    char *buf;
-    unsigned using_cmb_io;
-    int is_completed;
-};
+    if (spdk_nvme_cpl_is_error(cpl)) {
+        printf("Reset all zones failed\n");
+    }
+    outstanding_commands--;
+}
+
+static void
+reset_all_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
+{
+    outstanding_commands = 0;
+    int rc = spdk_nvme_zns_reset_zone(ns, qpair, 0, true, reset_zone_complete, NULL);
+	if (rc) {
+            fprintf(stderr, "Reset all zones failed\n");
+            exit(1);
+        } else {
+            outstanding_commands++;
+        }
+
+        while (outstanding_commands) {
+            spdk_nvme_qpair_process_completions(qpair, 0);
+        }
+}
 
 static int
-process_replay(struct bin_file_data *b)
+process_entry(struct bin_file_data *b, int entry_cnt)
 {
     struct ns_entry *ns_entry;
-    struct io_seq seq;
     int rc;
-    size_t sz;
     
     /* specify namespace and allocate io qpair for the namespace */
     ns_entry = TAILQ_FIRST(&g_namespaces);
@@ -334,6 +348,7 @@ process_replay(struct bin_file_data *b)
      * allocate a 4KB zeroed buffer which is required for data buffers 
      * used for SPDK NVMe I/O operations
      */
+    /*
     seq.using_cmb_io = 1;
     seq.buf = spdk_nvme_ctrlr_map_cmb(ns_entry->ctrlr, &sz);
     if (seq.buf == NULL || sz < 0x1000) {
@@ -352,19 +367,29 @@ process_replay(struct bin_file_data *b)
     }
     seq.is_completed = 0;
     seq.ns_entry = ns_entry;
+    */
 
     /* reset zone before write */
     if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
-        //reset_zone_and_wait_for_completion(&seq);
-        printf("I will delete this later...\n");
+        reset_all_zone(ns_entry->ns, ns_entry->qpair);
+        //printf("I will delete this later...\n");
     }
-    
-    // to do replay....
+    /*
+    for (int i = 0; i < entry_cnt; i++) {
+        rc = process_replay(&buffer[i]);
+        if (rc != 0) {
+            fprintf(stderr, "process_replay() failed\n");
+            rc = 1;
+            return rc;
+        }
+    }*/
+    printf("reset zone complete!\n");
 
-    spdk_free(seq.buf);
+    //spdk_free(seq.buf);
     spdk_nvme_ctrlr_free_io_qpair(ns_entry->qpair);
     return 0;
 }
+/* replay workload end */
 
 static void
 usage(const char *program_name)
@@ -408,7 +433,7 @@ int
 main(int argc, char **argv)
 {
     struct spdk_env_opts env_opts;
-    int rc, i;
+    int rc;
     uint64_t start_tsc, end_tsc, tsc_diff;
     char input_file_name[68];
     FILE *fptr;
@@ -477,7 +502,14 @@ main(int argc, char **argv)
     printf("Initialization complete.\n");
     
     start_tsc = spdk_get_ticks();
-
+    
+    process_entry(buffer, entry_cnt);
+    if (rc != 0) {
+        fprintf(stderr, "process_entry() failed\n");
+        rc = 1;
+        goto exit;
+    }
+    /*
     for (i = 0; i < entry_cnt; i++) {
         rc = process_replay(&buffer[i]);
         if (rc != 0) {
@@ -486,6 +518,7 @@ main(int argc, char **argv)
             goto exit;
         }
     }
+    */
 
     end_tsc = spdk_get_ticks();
     tsc_diff = end_tsc - start_tsc;

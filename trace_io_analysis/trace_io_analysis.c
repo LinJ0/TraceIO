@@ -196,16 +196,14 @@ static float g_latency_max = 0.0;
 static float g_latency_total = 0.0;
 static float g_latency_avg = 0.0;
 
-static int
+static void
 us_latency(uint64_t tsc_sc_time, uint64_t tsc_rate, float *max, float *min, float *total)
 {
-    int rc = 0;
     float us_sc_time = get_us_from_tsc(tsc_sc_time, tsc_rate);
     
     *max = (us_sc_time > *max) ? us_sc_time : *max;
     *min = (*min == 0 || us_sc_time < *min) ? us_sc_time : *min;
     *total += us_sc_time;
-    return rc;
 }
 
 static uint64_t g_read_cnt = 0, g_write_cnt = 0;
@@ -262,10 +260,7 @@ process_entry (struct bin_file_data *d)
     }
 
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        rc = us_latency(d->tsc_sc_time, d->tsc_rate, &g_latency_max, &g_latency_min, &g_latency_total);
-        if (rc) {
-            return rc;
-        }
+        us_latency(d->tsc_sc_time, d->tsc_rate, &g_latency_max, &g_latency_min, &g_latency_total);
     }
 
     /* 
