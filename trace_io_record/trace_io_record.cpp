@@ -4,12 +4,9 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/file.h"
+#include "../lib/trace_io.h"
 
 #include <map>
-
-#define UINT8BIT_MASK 0xFF
-#define UINT16BIT_MASK 0xFFFF
-#define UINT32BIT_MASK 0xFFFFFFFF
 
 extern "C" {
 #include "spdk/trace_parser.h"
@@ -45,24 +42,6 @@ extern "C" {
         return 0;
     }
 } /* extern "C" */
-
-struct bin_file_data {
-    uint32_t lcore;
-    uint64_t tsc_rate;
-    uint64_t tsc_timestamp;
-    uint32_t obj_idx;
-    uint64_t obj_id;
-    uint64_t tsc_sc_time; /* object from submit to complete (us) */
-    char     tpoint_name[32];
-    uint16_t opc;
-    uint16_t cid;
-    uint32_t nsid;
-    uint32_t cpl;
-    uint32_t cdw10;
-    uint32_t cdw11;
-    uint32_t cdw12;
-    uint32_t cdw13;
-};
 
 static void
 process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_base, FILE *fptr)
@@ -274,50 +253,6 @@ main(int argc, char **argv)
             process_output_file(&entry, g_flags->tsc_rate, tsc_base, fptr);
     }
     fclose(fptr);
-
-    /*
-    size_t entry_cnt;
-    size_t file_size;
-    size_t read_val;
-    
-    fptr = fopen(output_file_name, "rb");
-    if (fptr == NULL) {
-        fprintf(stderr, "Failed to open output file %s\n", output_file_name);
-        return -1; 
-    }   
-
-    fseek(fptr, 0, SEEK_END);
-    file_size = ftell(fptr);
-    rewind(fptr);
-    entry_cnt = file_size / sizeof(struct bin_file_data);
-    
-    struct bin_file_data buffer[entry_cnt];
-    
-    read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
-    if (read_val != (size_t)entry_cnt)
-        fprintf(stderr, "Fail to read output file\n");
-
-    for (i = 0; i < (int)entry_cnt; i++) {
-        printf("entry: %d  ", i);
-        printf("lcore: %d  ", buffer[i].lcore);
-        printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-        printf("tsc_timestamp: %ld  ", buffer[i].tsc_timestamp);
-        printf("obj_idx: %d  ", buffer[i].obj_idx);
-        printf("obj_id: %ld  ", buffer[i].obj_id);
-        printf("tsc_sc_time: %ld  ", buffer[i].tsc_sc_time);
-        printf("tpoint_name: %s  ", buffer[i].tpoint_name);
-        printf("opc: %d  ", buffer[i].opc);
-        printf("cid: %d  ", buffer[i].cid);
-        printf("nsid: %d  ", buffer[i].nsid);
-        printf("cpl: %d  ", buffer[i].cpl);
-        printf("cdw10: %d  ", buffer[i].cdw10);
-        printf("cdw11: %d  ", buffer[i].cdw11);
-        printf("cdw12: %d  ", buffer[i].cdw12);
-        printf("cdw13: %d  ", buffer[i].cdw13);
-        printf("\n");
-    }   
-    fclose(fptr);
-    */
 
     spdk_trace_parser_cleanup(g_parser);
 
