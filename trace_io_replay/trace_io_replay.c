@@ -11,16 +11,16 @@
 #include "../lib/trace_io.h"
 
 struct ctrlr_entry {
-	struct spdk_nvme_ctrlr		*ctrlr;
-	TAILQ_ENTRY(ctrlr_entry)	link;
-	char				        name[1024];
+    struct spdk_nvme_ctrlr *ctrlr;
+    TAILQ_ENTRY(ctrlr_entry) link;
+    char name[1024];
 };
 
 struct ns_entry {
-	struct spdk_nvme_ctrlr	    *ctrlr;
-	struct spdk_nvme_ns	        *ns;
-	TAILQ_ENTRY(ns_entry)	    link;
-	struct spdk_nvme_qpair	    *qpair;
+	struct spdk_nvme_ctrlr *ctrlr;
+	struct spdk_nvme_ns	*ns;
+	TAILQ_ENTRY(ns_entry) link;
+	struct spdk_nvme_qpair *qpair;
 };
 
 static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
@@ -336,32 +336,25 @@ replay_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 static int
 process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bin_file_data *d)
 {
-    printf("opc = %d\n", d->opc); // delete it later...
-
     int rc = 0;
     uint64_t slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
-    uint32_t nlb = (d->opc == NVME_OPC_COPY) ? (uint32_t)(d->cdw12 & UINT8BIT_MASK) + 1:
-                                               (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
+    uint32_t nlb = (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
+
     /* allocate data buffers for SPDK NVMe I/O operations */
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns); 
     char *replay_buf = (char *)spdk_zmalloc(nlb * block_size, block_size,
                              NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
-    /* io replay */
+    /* read write replay */
     outstanding_commands = 0;
 
     switch (d->opc) {
     case NVME_OPC_READ:
     case NVME_OPC_COMPARE:
-    case NVME_OPC_COPY:
         rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
     case NVME_OPC_WRITE:
     case NVME_ZNS_OPC_ZONE_APPEND:
         memset(replay_buf, 1, (size_t)nlb * block_size);
-        rc = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
-        //rc = spdk_nvme_ns_cmd_write(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
-        break;
-    case NVME_OPC_WRITE_ZEROES:
         rc = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
     case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
@@ -386,9 +379,6 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
         default:
             goto free_buf;
         }
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-        goto free_buf;
-        break;
     default:
         goto free_buf;
     }
@@ -414,19 +404,18 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
 {
     int rc = 0;
     uint64_t slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
-    uint32_t nlb = (d->opc == NVME_OPC_COPY) ? (uint32_t)(d->cdw12 & UINT8BIT_MASK) + 1:
-                                               (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
+    uint32_t nlb = (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
+
     /* allocate data buffers for SPDK NVMe I/O operations */
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns);
     char *replay_buf = (char *)spdk_zmalloc(nlb * block_size, block_size,
                              NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
-    /* io replay */
+    /* read write replay */
     outstanding_commands = 0;
 
     switch (d->opc) {
     case NVME_OPC_READ:
     case NVME_OPC_COMPARE:
-    case NVME_OPC_COPY:
         rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
     case NVME_OPC_WRITE:
@@ -434,7 +423,7 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
         rc = spdk_nvme_ns_cmd_write(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
     case NVME_OPC_WRITE_ZEROES:
-        rc = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
+        rc = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, NULL, 0);
         break;
     default:
         goto free_buf;

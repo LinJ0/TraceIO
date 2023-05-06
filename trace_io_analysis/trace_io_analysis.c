@@ -215,20 +215,20 @@ rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
     switch (opc) {
     case NVME_OPC_READ:
     case NVME_OPC_COMPARE: 
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
         (*read)++;
         break;
     case NVME_OPC_WRITE:
+    case NVME_ZNS_OPC_ZONE_APPEND:
+        (*write)++;
+        break;
     case NVME_OPC_WRITE_UNCORRECTABLE:
     case NVME_OPC_WRITE_ZEROES:
     case NVME_OPC_COPY:
-    case NVME_ZNS_OPC_ZONE_APPEND:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-        (*write)++;
-        break;
     case NVME_OPC_VERIFY:
     case NVME_OPC_DATASET_MANAGEMENT:
     case NVME_OPC_FLUSH:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
     case NVME_OPC_RESERVATION_REGISTER: 
     case NVME_OPC_RESERVATION_REPORT:
     case NVME_OPC_RESERVATION_ACQUIRE:
