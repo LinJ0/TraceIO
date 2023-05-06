@@ -592,7 +592,7 @@ main(int argc, char **argv)
     if (TAILQ_EMPTY(&g_controllers)) {
         fprintf(stderr, "no NVMe controllers found\n");
         goto exit;
-	}
+    }
     printf("Initialization complete.\n");
     
     start_tsc = spdk_get_ticks();
