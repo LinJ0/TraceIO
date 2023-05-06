@@ -4,7 +4,7 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/file.h"
-#include "../lib/trace_io.h"
+#include "../include/trace_io.h"
 
 #include <map>
 

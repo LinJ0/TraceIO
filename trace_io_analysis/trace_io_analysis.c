@@ -4,7 +4,7 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/file.h"
-#include "../lib/trace_io.h"
+#include "../include/trace_io.h"
 
 static bool g_print_tsc = false;
 static bool g_print_io = false;
@@ -16,15 +16,6 @@ get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
     return ((float)tsc) * 1000 * 1000 / tsc_rate;
 }
 
-static const char *
-format_argname(const char *name)
-{
-    static char namebuf[16];
-
-    snprintf(namebuf, sizeof(namebuf), "%s: ", name);
-    return namebuf;
-}
-
 /* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */                                                                                                                        
 static void
 print_uline(char marker, int line_len)
@@ -33,6 +24,134 @@ print_uline(char marker, int line_len)
         putchar(marker);
     }   
     putchar('\n');
+}
+
+/* trace analysis start */
+static uint64_t g_read_cnt = 0, g_write_cnt = 0;
+
+static float
+rw_ratio(uint64_t *read, uint64_t *write)
+{
+    float ratio = 0.0;
+    return ratio = (*read + *write) ? (*read * 100) / (*read + *write) : 0;
+}
+
+static int
+rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
+{
+    switch (opc) {
+    case NVME_OPC_READ:
+    case NVME_OPC_COMPARE: 
+        (*read)++;
+        break;
+    case NVME_OPC_WRITE:
+    case NVME_ZNS_OPC_ZONE_APPEND:
+        (*write)++;
+        break;
+    case NVME_OPC_WRITE_UNCORRECTABLE:
+    case NVME_OPC_WRITE_ZEROES:
+    case NVME_OPC_COPY:
+    case NVME_OPC_VERIFY:
+    case NVME_OPC_DATASET_MANAGEMENT:
+    case NVME_OPC_FLUSH:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+    case NVME_OPC_RESERVATION_REGISTER: 
+    case NVME_OPC_RESERVATION_REPORT:
+    case NVME_OPC_RESERVATION_ACQUIRE:
+    case NVME_OPC_RESERVATION_RELEASE:
+        break;
+    default:
+        return -1;
+    }
+    return 0;
+}
+
+struct latency {
+	uint64_t val;
+	TAILQ_ENTRY(latency) link;
+};
+
+static TAILQ_HEAD(latency_list, latency) g_latency_sum = TAILQ_HEAD_INITIALIZER(g_latency_sum);
+static uint64_t g_tsc_rate = 0;
+static uint64_t g_latency_tsc_min = 0, g_latency_tsc_max = 0;
+static float g_latency_us_min = 0.0, g_latency_us_max = 0.0, g_latency_us_avg = 0.0;
+static float g_latency_tsc_avg = 0;
+
+static void
+latency_min_max(uint64_t tsc_sc_time, uint64_t tsc_rate)
+{
+    g_latency_tsc_max = (tsc_sc_time > g_latency_tsc_max) ? tsc_sc_time : g_latency_tsc_max;
+
+    if (!g_latency_tsc_min || tsc_sc_time < g_latency_tsc_min) {
+        g_latency_tsc_min = tsc_sc_time;
+    } else {
+        g_latency_tsc_min = g_latency_tsc_min;
+    }
+    g_latency_us_max = get_us_from_tsc(g_latency_tsc_max, tsc_rate);
+    g_latency_us_min = get_us_from_tsc(g_latency_tsc_min, tsc_rate);
+}
+
+static void
+latency_total(uint64_t tsc_sc_time)
+{
+    if (TAILQ_EMPTY(&g_latency_sum)) {
+        struct latency *latency_entry = (struct latency *)malloc(sizeof(struct latency));
+        if (latency_entry == NULL) {
+            fprintf(stderr, "Fail to allocate memory for latency entry\n");
+            return;
+        }
+        TAILQ_INSERT_TAIL(&g_latency_sum, latency_entry, link);
+        TAILQ_LAST(&g_latency_sum, latency_list)->val = 0;
+    }
+    if (tsc_sc_time < UINT64_MAX - TAILQ_LAST(&g_latency_sum, latency_list)->val) {
+        TAILQ_LAST(&g_latency_sum, latency_list)->val += tsc_sc_time;
+    } else {
+        struct latency *latency_entry = (struct latency *)malloc(sizeof(struct latency));
+        if (latency_entry == NULL) {
+            fprintf(stderr, "Fail to allocate memory for latency entry\n");
+            struct latency *cur, *tmp;
+            TAILQ_FOREACH_SAFE(cur, &g_latency_sum, link, tmp) {
+                TAILQ_REMOVE(&g_latency_sum, cur, link);
+                free(cur);
+            }
+            return;
+        }
+        TAILQ_INSERT_TAIL(&g_latency_sum, latency_entry, link);
+        TAILQ_LAST(&g_latency_sum, latency_list)->val += tsc_sc_time;
+    }
+}
+
+static void
+latency_avg(int number_of_io)
+{
+    if (number_of_io == 0) 
+        return;
+    
+    if (TAILQ_EMPTY(&g_latency_sum)) {
+        fprintf(stderr, "No latency entry\n");
+        return;
+    }
+
+    struct latency *cur, *tmp;
+    TAILQ_FOREACH_SAFE(cur, &g_latency_sum, link, tmp) {
+        g_latency_tsc_avg += (float)cur->val / number_of_io;
+        TAILQ_REMOVE(&g_latency_sum, cur, link);
+        free(cur);
+    }
+    printf("\n");
+    
+    g_latency_us_avg = get_us_from_tsc(g_latency_tsc_avg, g_tsc_rate);
+}
+/* trace analysis end */
+
+static const char *
+format_argname(const char *name)
+{
+    static char namebuf[16];
+
+    snprintf(namebuf, sizeof(namebuf), "%s: ", name);
+    return namebuf;
 }
 
 static void
@@ -191,55 +310,6 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
     }
 }
 
-static float g_latency_min = 0.0;
-static float g_latency_max = 0.0;
-static float g_latency_total = 0.0;
-static float g_latency_avg = 0.0;
-
-static void
-us_latency(uint64_t tsc_sc_time, uint64_t tsc_rate, float *max, float *min, float *total)
-{
-    float us_sc_time = get_us_from_tsc(tsc_sc_time, tsc_rate);
-    
-    *max = (us_sc_time > *max) ? us_sc_time : *max;
-    *min = (*min == 0 || us_sc_time < *min) ? us_sc_time : *min;
-    *total += us_sc_time;
-}
-
-static uint64_t g_read_cnt = 0, g_write_cnt = 0;
-static float g_rw_ratio = 0.0;
-
-static int
-rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
-{
-    switch (opc) {
-    case NVME_OPC_READ:
-    case NVME_OPC_COMPARE: 
-        (*read)++;
-        break;
-    case NVME_OPC_WRITE:
-    case NVME_ZNS_OPC_ZONE_APPEND:
-        (*write)++;
-        break;
-    case NVME_OPC_WRITE_UNCORRECTABLE:
-    case NVME_OPC_WRITE_ZEROES:
-    case NVME_OPC_COPY:
-    case NVME_OPC_VERIFY:
-    case NVME_OPC_DATASET_MANAGEMENT:
-    case NVME_OPC_FLUSH:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-    case NVME_OPC_RESERVATION_REGISTER: 
-    case NVME_OPC_RESERVATION_REPORT:
-    case NVME_OPC_RESERVATION_ACQUIRE:
-    case NVME_OPC_RESERVATION_RELEASE:
-        break;
-    default:
-        break;
-    }
-    return 0;
-}
-
 static int
 process_entry (struct bin_file_data *d)
 {
@@ -254,13 +324,18 @@ process_entry (struct bin_file_data *d)
     bool cdw13 = false;
     uint64_t slba = 0;
 
-    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
-    if (rc) {
-        return rc;
+    if (!g_tsc_rate) {
+        g_tsc_rate = d->tsc_rate;
     }
 
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        us_latency(d->tsc_sc_time, d->tsc_rate, &g_latency_max, &g_latency_min, &g_latency_total);
+        latency_min_max(d->tsc_sc_time, d->tsc_rate);
+        latency_total(d->tsc_sc_time);
+    }
+
+    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
+    if (rc) {
+        return rc;
     }
 
     /* 
@@ -381,14 +456,9 @@ int
 main(int argc, char **argv)
 {
     struct spdk_env_opts env_opts;
-    int rc;
     char input_file_name[68];
-    FILE *fptr;
-    int file_size;
-    int entry_cnt;
-    size_t read_val;
 
-    rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
+    int rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
     if (rc != 0) {
         return rc;
     }
@@ -403,20 +473,20 @@ main(int argc, char **argv)
         exit(1);
     }
 
-    fptr = fopen(input_file_name, "rb");
+    FILE *fptr = fopen(input_file_name, "rb");
     if (fptr == NULL) {
         fprintf(stderr, "Failed to open input file %s\n", input_file_name);
         return -1; 
     }
 
     fseek(fptr, 0, SEEK_END);
-    file_size = ftell(fptr);
+    int file_size = ftell(fptr);
     rewind(fptr);
-    entry_cnt = file_size / sizeof(struct bin_file_data);
+    int entry_cnt = file_size / sizeof(struct bin_file_data);
 
     struct bin_file_data buffer[entry_cnt];    
  
-    read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
+    size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
     if (read_val != (size_t)entry_cnt)
         fprintf(stderr, "Fail to read input file\n");
     fclose(fptr);
@@ -437,12 +507,18 @@ main(int argc, char **argv)
     }
 
     print_uline('=', printf("\nTrace Analysis\n")); 
-    g_rw_ratio = (g_read_cnt + g_write_cnt) ? (g_read_cnt * 100) / (g_read_cnt + g_write_cnt) : 0;
-    g_latency_avg = (g_read_cnt + g_write_cnt) ? g_latency_total / (g_read_cnt + g_write_cnt) : 0;
     printf("%-15s  ", "Access pattern");
-    printf("READ:  %-20jd WRITE: %-20jd R/W: %18.3f %%\n", g_read_cnt, g_write_cnt, g_rw_ratio);
+    printf("READ:  %-20jd WRITE: %-20jd R/W: %18.3f %%\n", 
+            g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt)); 
+    
+    latency_avg(entry_cnt >> 1);
+    printf("%-15s  ", "Latency (tsc)");
+    printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20.3f\n", 
+            g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
+
     printf("%-15s  ", "Latency (us)");
-    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %20.3f\n", g_latency_min, g_latency_max, g_latency_avg);
+    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
+            g_latency_us_min, g_latency_us_max, g_latency_us_avg);
 
     spdk_env_fini();
     return 0;

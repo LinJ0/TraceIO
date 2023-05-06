@@ -8,7 +8,7 @@
 #include "spdk/vmd.h"
 #include "spdk/nvme_zns.h"
 #include "spdk/log.h"
-#include "../lib/trace_io.h"
+#include "../include/trace_io.h"
 
 struct ctrlr_entry {
     struct spdk_nvme_ctrlr *ctrlr;
@@ -473,7 +473,7 @@ process_entry(struct bin_file_data *b, int entry_cnt)
                 fprintf(stderr, "process_zns_replay() failed\n");
                 goto free_qpair;
             }
-            printf("process_zns_replay() success\n");
+            //printf("process_zns_replay() success\n");
         }
     } else {
         printf("Not ZNS namespace\n");
@@ -487,7 +487,7 @@ process_entry(struct bin_file_data *b, int entry_cnt)
                 fprintf(stderr, "process_replay() failed\n");
                 goto free_qpair;
             }
-            printf("process_replay() success\n");
+            //printf("process_replay() success\n");
         }
     } 
 
@@ -538,7 +538,6 @@ int
 main(int argc, char **argv)
 {
     struct spdk_env_opts env_opts;
-    uint64_t start_tsc, end_tsc, tsc_diff;
     char input_file_name[68];
     
     spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
@@ -595,13 +594,15 @@ main(int argc, char **argv)
     }
     printf("Initialization complete.\n");
     
-    start_tsc = spdk_get_ticks();
+    uint64_t tsc_rate = spdk_get_ticks_hz();
+    uint64_t start_tsc = spdk_get_ticks();
    
     process_entry(buffer, entry_cnt);
 
-    end_tsc = spdk_get_ticks();
-    tsc_diff = end_tsc - start_tsc;
-    printf("Total time: %ju\n", tsc_diff);
+    uint64_t end_tsc = spdk_get_ticks();
+    uint64_t tsc_diff = end_tsc - start_tsc;
+    float us_diff = tsc_diff * 1000 * 1000 / tsc_rate;
+    printf("Total time: %20ju (tsc), %20.3f (us)\n", tsc_diff, us_diff);
    
     if (g_report_zone) {
         report_zone();
