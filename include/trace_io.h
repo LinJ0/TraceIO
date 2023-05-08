@@ -9,8 +9,8 @@ struct bin_file_data {
     uint32_t lcore;
     uint64_t tsc_rate;
     uint64_t tsc_timestamp;
-    uint32_t obj_idx;
     uint64_t obj_id;
+    uint64_t obj_start; /* object submit start time */
     uint64_t tsc_sc_time; /* object from submit to complete */
     char     tpoint_name[32];       
     uint16_t opc;

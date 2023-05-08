@@ -139,7 +139,6 @@ latency_avg(int number_of_io)
         TAILQ_REMOVE(&g_latency_sum, cur, link);
         free(cur);
     }
-    printf("\n");
     
     g_latency_us_avg = get_us_from_tsc(g_latency_tsc_avg, g_tsc_rate);
 }
@@ -311,7 +310,7 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 }
 
 static int
-process_entry (struct bin_file_data *d)
+process_entry(struct bin_file_data *d)
 {
     int     rc;
     float   timestamp_us;
@@ -324,6 +323,11 @@ process_entry (struct bin_file_data *d)
     bool cdw13 = false;
     uint64_t slba = 0;
 
+    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
+    if (rc) {
+        return 0; /* There are something wrong but it doesn't matter */
+    }
+
     if (!g_tsc_rate) {
         g_tsc_rate = d->tsc_rate;
     }
@@ -331,11 +335,6 @@ process_entry (struct bin_file_data *d)
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
         latency_min_max(d->tsc_sc_time, d->tsc_rate);
         latency_total(d->tsc_sc_time);
-    }
-
-    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
-    if (rc) {
-        return rc;
     }
 
     /* 
@@ -508,7 +507,7 @@ main(int argc, char **argv)
 
     print_uline('=', printf("\nTrace Analysis\n")); 
     printf("%-15s  ", "Access pattern");
-    printf("READ:  %-20jd WRITE: %-20jd R/W: %18.3f %%\n", 
+    printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n", 
             g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt)); 
     
     latency_avg(entry_cnt >> 1);

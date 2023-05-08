@@ -16,6 +16,9 @@ extern "C" {
 static struct spdk_trace_parser *g_parser;
 static const struct spdk_trace_flags *g_flags;
 static char *g_exe_name;
+static bool g_debug_enable = false;
+static uint64_t g_tsc_base = 0;
+static uint64_t g_tsc_rate = 0;
 
 /* This is a bit ugly, but we don't want to include env_dpdk in the app, while spdk_util, which we
  * do need, uses some of the functions implemented there.  We're not actually using the functions
@@ -44,36 +47,28 @@ extern "C" {
 } /* extern "C" */
 
 static void
-process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t tsc_base, FILE *fptr)
+process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
 {
     struct spdk_trace_entry *e = entry->entry;
-    const struct spdk_trace_tpoint  *d;
-    size_t	i;
-    struct bin_file_data buffer;
-
-    d = &g_flags->tpoint[e->tpoint_id];
-    
+    const struct spdk_trace_tpoint *d = &g_flags->tpoint[e->tpoint_id];
+    struct bin_file_data buffer; 
     buffer.lcore = entry->lcore;
-    buffer.tsc_rate = tsc_rate;
-    buffer.tsc_timestamp = e->tsc - tsc_base;    
+    buffer.tsc_rate = g_tsc_rate;
+    buffer.tsc_timestamp = e->tsc - g_tsc_base;    
     buffer.obj_id = e->object_id;
     
-    if (entry->object_index < UINT64_MAX) {
-        buffer.obj_idx = entry->object_index;
-    } else {
-        buffer.obj_idx = 0;
-    }
-
     if (!d->new_object && d->object_type != OBJECT_NONE) {
         buffer.tsc_sc_time = e->tsc - entry->object_start;
+        buffer.obj_start = entry->object_start - g_tsc_base;
     } else {
         buffer.tsc_sc_time = 0;
+        buffer.obj_start = entry->object_start - g_tsc_base;
     }
 
     strcpy(buffer.tpoint_name, d->name);
     
     if (strcmp(buffer.tpoint_name, "NVME_IO_SUBMIT") == 0) {
-        for (i = 1; i < d->num_args; ++i) {
+        for (size_t i = 1; i < d->num_args; ++i) {
             if (strcmp(d->args[i].name, "opc") == 0) {
                 buffer.opc = (uint16_t)(entry->args[i].integer & UINT8BIT_MASK);
             } else if (strcmp(d->args[i].name, "cid") == 0) {
@@ -93,7 +88,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, ui
             }
         }
     } else if (strcmp(buffer.tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        for (i = 1; i < d->num_args; ++i) {
+        for (size_t i = 1; i < d->num_args; ++i) {
             if (strcmp(d->args[i].name, "cid") == 0) {
                 buffer.cid = entry->args[i].integer;
             } else if (strcmp(d->args[i].name, "cpl") == 0) {
@@ -121,26 +116,22 @@ usage(void)
     fprintf(stderr, "   '-f' to specify a tracepoint file name\n");
     fprintf(stderr, "        (-s and -f are mutually exclusive)\n");
     fprintf(stderr, "   '-o' to produce output file and specify output file name.\n");
+    fprintf(stderr, "   '-d' debug to view the content of output file.\n");
 }
 
 int
 main(int argc, char **argv)
 {
-    struct spdk_trace_parser_opts	opts;
-    struct spdk_trace_parser_entry	entry;
-    int				    lcore = SPDK_TRACE_MAX_LCORE;
-    uint64_t			tsc_base, entry_count;
-    const char			*app_name = NULL;
-    const char			*file_name = NULL;
-    int				    op, i;
-    FILE                *fptr;
-    char                output_file_name[68];
-    char				shm_name[64];
-    int				    shm_id = -1, shm_pid = -1;
-    const struct spdk_trace_tpoint	*d;
+    int op;
+    const char *app_name = NULL;
+    const char *file_name = NULL;
+    char output_file_name[68];
+    char shm_name[64];
+    int shm_id = -1, shm_pid = -1;
+    int lcore = SPDK_TRACE_MAX_LCORE;
 
     g_exe_name = argv[0];
-    while ((op = getopt(argc, argv, "c:f:i:p:s:t")) != -1) {
+    while ((op = getopt(argc, argv, "c:f:i:p:s:td")) != -1) {
         switch (op) {
         case 'c':
             lcore = atoi(optarg);
@@ -162,6 +153,9 @@ main(int argc, char **argv)
             break;
         case 'f':
             file_name = optarg;
+            break;
+        case 'd':
+            g_debug_enable = true;
             break;
         default:
             usage();
@@ -203,6 +197,7 @@ main(int argc, char **argv)
         file_name = shm_name;
     }
     
+    FILE *fptr;
     if (output_file_name) {
         fptr = fopen(output_file_name, "wb");
         if (fptr == NULL) {
@@ -212,6 +207,7 @@ main(int argc, char **argv)
         printf("Output .bin file: %s\n", output_file_name);
     }   
 
+    struct spdk_trace_parser_opts opts;
     opts.filename = file_name;
     opts.lcore = lcore;
     opts.mode = app_name == NULL ? SPDK_TRACE_PARSER_MODE_FILE : SPDK_TRACE_PARSER_MODE_SHM;
@@ -222,9 +218,11 @@ main(int argc, char **argv)
     }
 
     g_flags = spdk_trace_parser_get_flags(g_parser);
-    printf("TSC Rate: %ju\n", g_flags->tsc_rate);
+    g_tsc_rate = g_flags->tsc_rate;
+    printf("TSC Rate: %ju\n", g_tsc_rate);
 
-    for (i = 0; i < SPDK_TRACE_MAX_LCORE; ++i) {
+    uint64_t entry_count;
+    for (int i = 0; i < SPDK_TRACE_MAX_LCORE; ++i) {
         if (lcore == SPDK_TRACE_MAX_LCORE || i == lcore) {
             entry_count = spdk_trace_parser_get_entry_count(g_parser, i);
             if (entry_count > 0) {
@@ -233,26 +231,67 @@ main(int argc, char **argv)
         }
     }
 
-    tsc_base = 0;
+    const struct spdk_trace_tpoint *d;
+    struct spdk_trace_parser_entry entry;
     while (spdk_trace_parser_next_entry(g_parser, &entry)) {
         d = &g_flags->tpoint[entry.entry->tpoint_id];
     
         if (strcmp(d->name, "NVME_IO_SUBMIT") != 0 && strcmp(d->name, "NVME_IO_COMPLETE") != 0) {
             continue;
-        } else if ((strcmp(d->name, "NVME_IO_SUBMIT") == 0 || strcmp(d->name, "NVME_IO_COMPLETE") == 0)
-                    && entry.args[0].integer) { 
+        } else if (entry.args[0].integer) { 
             continue;   
+        } else if (entry.object_start & (uint64_t)1 << 31) {
+            continue;
         }
-        /* tsc_base = tsc of first io cmd entry */
-        if (!tsc_base) {
-            tsc_base = entry.entry->tsc;
+
+        /* g_tsc_base = tsc of first io cmd entry */
+        if (!g_tsc_base) {
+            g_tsc_base = entry.entry->tsc;
         }
 
         /* process output file */
-        if (output_file_name)
-            process_output_file(&entry, g_flags->tsc_rate, tsc_base, fptr);
+        process_output_file(&entry, fptr);
     }
     fclose(fptr);
+
+    if (g_debug_enable) {
+        printf("Debug mode enabled\n");
+        fptr = fopen(output_file_name, "rb");
+        if (fptr == NULL) {
+            fprintf(stderr, "Failed to open output file %s\n", output_file_name);
+            return -1; 
+        }
+        fseek(fptr, 0, SEEK_END);
+        int file_size = ftell(fptr);
+        rewind(fptr);
+        int entry_cnt = file_size / sizeof(struct bin_file_data);
+
+        struct bin_file_data buffer[entry_cnt];    
+        
+        size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
+        if (read_val != (size_t)entry_cnt)
+            fprintf(stderr, "Fail to read input file\n");
+        fclose(fptr);
+
+        for (int i = 0; i < entry_cnt; i++) {
+            printf("tsc_timestamp: %20ld  ", buffer[i].tsc_timestamp);
+            printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
+            printf("opc: %2d  ", buffer[i].opc); 
+            //printf("lcore: %d  ", buffer[i].lcore);
+            //printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
+            printf("cid: %3d  ", buffer[i].cid);            
+            printf("obj_id: %ld  ", buffer[i].obj_id);
+            printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
+            printf("obj_start_time: %15ld  ", buffer[i].obj_start);
+            //printf("nsid: %d  ", buffer[i].nsid);
+            //printf("cpl: %d  ", buffer[i].cpl);
+            //printf("cdw10: %d  ", buffer[i].cdw10);
+            //printf("cdw11: %d  ", buffer[i].cdw11);
+            //printf("cdw12: %d  ", buffer[i].cdw12);
+            //printf("cdw13: %d  ", buffer[i].cdw13);
+            printf("\n");
+        }
+    }
 
     spdk_trace_parser_cleanup(g_parser);
 

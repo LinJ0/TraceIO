@@ -146,17 +146,22 @@ cleanup(void)
 static void
 identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 {
-    uint64_t num_zones = spdk_nvme_zns_ns_get_num_zones(ns);
-    uint64_t zone_size = spdk_nvme_zns_ns_get_zone_size(ns);
-    uint32_t zone_append_size_limit = spdk_nvme_zns_ctrlr_get_max_zone_append_size(ctrlr);
-    const struct spdk_nvme_ns_data *ref_ns_data = spdk_nvme_ns_get_data(ns);
-    const struct spdk_nvme_zns_ns_data *ref_ns_zns_data = spdk_nvme_zns_ns_get_data(ns);
-    
-    print_uline('=', printf("\nNVMe ZNS Zone Information\n"));    
-    printf("number of zone: %lu\n", num_zones);
-    printf("size of zone: %lu (%lu * %lu)\n", zone_size, ref_ns_zns_data->lbafe->zsze, ref_ns_data->nsze);
-    printf("size of lBA: %lu\n", ref_ns_data->nsze);
-    printf("max zone append size: %u\n", zone_append_size_limit);
+    uint64_t lba_size = spdk_nvme_ns_get_sector_size(ns);    
+    uint64_t zone_num = spdk_nvme_zns_ns_get_num_zones(ns);
+    uint64_t zone_size_bytes = spdk_nvme_zns_ns_get_zone_size(ns);
+    uint64_t zone_size_blocks = spdk_nvme_zns_ns_get_zone_size_sectors(ns);
+    uint32_t max_zone_append_size = spdk_nvme_zns_ctrlr_get_max_zone_append_size(ctrlr);
+    uint32_t max_open_zone = spdk_nvme_zns_ns_get_max_open_zones(ns);
+    uint32_t max_active_zone = spdk_nvme_zns_ns_get_max_active_zones(ns);    
+
+
+    print_uline('=', printf("\nNVMe ZNS Zone Information\n"));
+    printf("Size of LBA: %lu (bytes)\n", lba_size);
+    printf("Number of Zone: %lu\n", zone_num);
+    printf("Size of Zone: %lu (bytes) / %lu (blocks)\n", zone_size_bytes, zone_size_blocks);
+    printf("Max Zone Append Size: %u\n", max_zone_append_size);
+    printf("Max Open Zone: %u\n", max_open_zone);
+    printf("Max Active Zone: %u\n", max_active_zone);
     printf("\n");
 }
 
@@ -204,8 +209,9 @@ static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
     default:
         printf("%-20s", "Reserved");
     }
-    printf(" ZT: %-20s ZA: 0x%-18x\n", (desc->zt == SPDK_NVME_ZONE_TYPE_SEQWR) ? "SWR" : "Reserved",
-           desc->za.raw);
+    printf(" ZT: %-20s", (desc->zt == SPDK_NVME_ZONE_TYPE_SEQWR) ? "SWR" : "Reserved");
+    // printf(" ZA: 0x%-18x\n", desc->za.raw);
+    printf("\n");
 
     if (!desc->za.bits.zdev) {
         return;
@@ -568,10 +574,10 @@ main(int argc, char **argv)
     struct bin_file_data buffer[entry_cnt];    
  
     size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
-    if (read_val != (size_t)entry_cnt)
-    printf("reset zone complete!\n");
+    if (read_val != (size_t)entry_cnt) {
         fprintf(stderr, "Fail to read input file\n");
-    
+        return -1;
+    }
     fclose(fptr);
 
     spdk_env_opts_init(&env_opts);
@@ -602,7 +608,7 @@ main(int argc, char **argv)
     uint64_t end_tsc = spdk_get_ticks();
     uint64_t tsc_diff = end_tsc - start_tsc;
     float us_diff = tsc_diff * 1000 * 1000 / tsc_rate;
-    printf("Total time: %20ju (tsc), %20.3f (us)\n", tsc_diff, us_diff);
+    printf("Total time: %15ju (tsc) %15.3f (us)\n", tsc_diff, us_diff);
    
     if (g_report_zone) {
         report_zone();
