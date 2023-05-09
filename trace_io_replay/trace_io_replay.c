@@ -82,6 +82,7 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
     struct spdk_nvme_ns *ns;
     const struct spdk_nvme_ctrlr_data *cdata;
 
+    /* register ctrlr */
     entry = (struct ctrlr_entry *)malloc(sizeof(struct ctrlr_entry));
     if (entry == NULL) {
         perror("ctrlr_entry malloc");
@@ -545,10 +546,7 @@ main(int argc, char **argv)
 {
     struct spdk_env_opts env_opts;
     char input_file_name[68];
-    
-    spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
-    snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
-    
+
     /* Get the input file name */
     int rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
     if (rc != 0) {
@@ -580,12 +578,19 @@ main(int argc, char **argv)
     }
     fclose(fptr);
 
+    /* Get trid */                                                                                                                                                                                         
+    spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
+    snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
+
+    /* Initialize env */
     spdk_env_opts_init(&env_opts);
     env_opts.name = "trace_io_replay";
     if (spdk_env_init(&env_opts) < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");
         return 1;
     }
+
+    /* Register ctrlr & register ns */
     printf("Initializing NVMe Controllers\n");
     
     rc = spdk_nvme_probe(&g_trid, NULL, probe_cb, attach_cb, NULL);
@@ -600,6 +605,7 @@ main(int argc, char **argv)
     }
     printf("Initialization complete.\n");
     
+    /* Start trace repaly procedure */
     uint64_t tsc_rate = spdk_get_ticks_hz();
     uint64_t start_tsc = spdk_get_ticks();
    
@@ -609,7 +615,8 @@ main(int argc, char **argv)
     uint64_t tsc_diff = end_tsc - start_tsc;
     float us_diff = tsc_diff * 1000 * 1000 / tsc_rate;
     printf("Total time: %15ju (tsc) %15.3f (us)\n", tsc_diff, us_diff);
-   
+  
+    /* Report zone */
     if (g_report_zone) {
         report_zone();
     }
