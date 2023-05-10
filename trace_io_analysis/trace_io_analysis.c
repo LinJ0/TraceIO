@@ -1,14 +1,34 @@
-#include "spdk/stdinc.h"
+
 #include "spdk/env.h"
 #include "spdk/likely.h"
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/file.h"
+#include "spdk/nvme.h"
+#include "spdk/vmd.h"
+#include "spdk/nvme_zns.h"
 #include "../include/trace_io.h"
 
+struct ctrlr_entry {
+    struct spdk_nvme_ctrlr *ctrlr;
+    TAILQ_ENTRY(ctrlr_entry) link;
+    char name[1024];
+};
+
+struct ns_entry {
+	struct spdk_nvme_ctrlr *ctrlr;
+	struct spdk_nvme_ns	*ns;
+	TAILQ_ENTRY(ns_entry) link;
+	struct spdk_nvme_qpair *qpair;
+};
+
+static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
+static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
+static struct spdk_nvme_transport_id g_trid = {};
 static bool g_print_tsc = false;
 static bool g_print_io = false;
 static bool g_input_file = false;
+static uint64_t g_ns_block = 0; /* number of blocks in a namespace */
 
 static float
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
@@ -16,7 +36,7 @@ get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
     return ((float)tsc) * 1000 * 1000 / tsc_rate;
 }
 
-/* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */                                                                                                                        
+/* Underline a "line" with the given marker, e.g. print_uline("=", printf(...)); */
 static void
 print_uline(char marker, int line_len)
 {
@@ -25,6 +45,101 @@ print_uline(char marker, int line_len)
     }   
     putchar('\n');
 }
+
+/* initialize NVMe controllers start */
+static void
+register_ns(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
+{
+    struct ns_entry *entry;
+
+    if (!spdk_nvme_ns_is_active(ns)) {
+        return;
+    }   
+
+    entry = (struct ns_entry *)malloc(sizeof(struct ns_entry));
+    if (entry == NULL) {
+        perror("ns_entry malloc");
+        exit(1);
+    }   
+
+    entry->ctrlr = ctrlr;
+    entry->ns = ns; 
+    TAILQ_INSERT_TAIL(&g_namespaces, entry, link);
+
+    printf("  Namespace ID: %d size: %juGB\n", spdk_nvme_ns_get_id(ns),
+            spdk_nvme_ns_get_size(ns) / 1000000000);
+}
+
+static bool
+probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+     struct spdk_nvme_ctrlr_opts *opts)
+{
+    printf("Attaching to %s\n", trid->traddr);
+
+    return true;
+}
+
+static void
+attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts)
+{
+    int nsid;
+    struct ctrlr_entry *entry;
+    struct spdk_nvme_ns *ns;
+    const struct spdk_nvme_ctrlr_data *cdata;
+
+    /* register ctrlr */
+    entry = (struct ctrlr_entry *)malloc(sizeof(struct ctrlr_entry));
+    if (entry == NULL) {
+        perror("ctrlr_entry malloc");
+        exit(1);
+    }
+
+    printf("Attached to %s\n", trid->traddr);
+
+    cdata = spdk_nvme_ctrlr_get_data(ctrlr);
+    snprintf(entry->name, sizeof(entry->name), "%-20.20s (%-20.20s)", cdata->mn, cdata->sn);
+
+    entry->ctrlr = ctrlr;
+    TAILQ_INSERT_TAIL(&g_controllers, entry, link);
+
+    /*
+     * Each controller has one or more namespaces.
+     * Note that in NVMe, namespace IDs start at 1, not 0.
+     */
+    for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr); nsid != 0;
+        nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, nsid)) {
+        ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+        if (ns == NULL) {
+            continue;
+        }
+        register_ns(ctrlr, ns);
+    }
+}
+
+static void
+cleanup(void)
+{
+    struct ns_entry *ns_entry, *tmp_ns_entry;
+    struct ctrlr_entry *ctrlr_entry, *tmp_ctrlr_entry;
+    struct spdk_nvme_detach_ctx *detach_ctx = NULL;
+
+    TAILQ_FOREACH_SAFE(ns_entry, &g_namespaces, link, tmp_ns_entry) {
+        TAILQ_REMOVE(&g_namespaces, ns_entry, link);
+        free(ns_entry);
+    }
+
+    TAILQ_FOREACH_SAFE(ctrlr_entry, &g_controllers, link, tmp_ctrlr_entry) {
+        TAILQ_REMOVE(&g_controllers, ctrlr_entry, link);
+        spdk_nvme_detach_async(ctrlr_entry->ctrlr, &detach_ctx);
+        free(ctrlr_entry);
+    }
+
+    if (detach_ctx) {
+        spdk_nvme_detach_poll(detach_ctx);
+    }
+}
+/* initialize NVMe controllers end */
 
 /* trace analysis start */
 static uint64_t g_read_cnt = 0, g_write_cnt = 0;
@@ -46,10 +161,10 @@ rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
         break;
     case NVME_OPC_WRITE:
     case NVME_ZNS_OPC_ZONE_APPEND:
+    case NVME_OPC_WRITE_ZEROES:
         (*write)++;
         break;
     case NVME_OPC_WRITE_UNCORRECTABLE:
-    case NVME_OPC_WRITE_ZEROES:
     case NVME_OPC_COPY:
     case NVME_OPC_VERIFY:
     case NVME_OPC_DATASET_MANAGEMENT:
@@ -141,6 +256,45 @@ latency_avg(int number_of_io)
     }
     
     g_latency_us_avg = get_us_from_tsc(g_latency_tsc_avg, g_tsc_rate);
+}
+
+static int
+blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t *w_blk)
+{
+    int rc = 0;
+    uint64_t idx = slba;
+
+    switch (opc) {
+    case NVME_OPC_READ:
+    case NVME_OPC_COMPARE: 
+        for (int i = 0; i < nlb; i++) {
+            r_blk[idx + i]++;
+        }
+        break;        
+    case NVME_OPC_WRITE:
+    case NVME_ZNS_OPC_ZONE_APPEND:
+    case NVME_OPC_WRITE_ZEROES:
+        for (int i = 0; i < nlb; i++) {
+            w_blk[idx + i]++;
+        }
+        break;
+    case NVME_OPC_WRITE_UNCORRECTABLE:
+    case NVME_OPC_COPY:
+    case NVME_OPC_VERIFY:
+    case NVME_OPC_DATASET_MANAGEMENT:
+    case NVME_OPC_FLUSH:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+    case NVME_OPC_RESERVATION_REGISTER: 
+    case NVME_OPC_RESERVATION_REPORT:
+    case NVME_OPC_RESERVATION_ACQUIRE:
+    case NVME_OPC_RESERVATION_RELEASE:
+        break;
+    default:
+        rc = 1;
+        break; 
+    }   
+    return rc;    
 }
 /* trace analysis end */
 
@@ -310,7 +464,7 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 }
 
 static int
-process_entry(struct bin_file_data *d)
+process_entry(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
 {
     int     rc;
     float   timestamp_us;
@@ -321,11 +475,11 @@ process_entry(struct bin_file_data *d)
     bool cdw11 = false;
     bool cdw12 = false;
     bool cdw13 = false;
-    uint64_t slba = 0;
 
     rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
     if (rc) {
-        return 0; /* There are something wrong but it doesn't matter */
+        printf("Unknown Opcode\n");
+        return 1;
     }
 
     if (!g_tsc_rate) {
@@ -335,6 +489,20 @@ process_entry(struct bin_file_data *d)
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
         latency_min_max(d->tsc_sc_time, d->tsc_rate);
         latency_total(d->tsc_sc_time);
+    }
+
+    uint64_t slba = 0;    
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
+        slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
+
+        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
+            uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
+            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
+        }
+    }
+    if (rc) {
+        printf("Count block read / write fail\n");
+        return 1;
     }
 
     /* 
@@ -414,6 +582,22 @@ process_entry(struct bin_file_data *d)
     return rc;
 }
 
+/* Get namespace data start */
+static void
+get_ns_info(void)
+{
+    struct ns_entry *ns_entry = TAILQ_FIRST(&g_namespaces);
+    
+    if (spdk_nvme_ns_get_csi(ns_entry->ns) != SPDK_NVME_CSI_ZNS) {
+        return;
+    }
+
+    const struct spdk_nvme_ns_data *ndata = spdk_nvme_ns_get_data(ns_entry->ns);
+    g_ns_block = ndata->ncap;
+}
+
+/* Get namespace data end */
+
 static void
 usage(const char *program_name)
 {
@@ -454,10 +638,9 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
 int
 main(int argc, char **argv)
 {
-    struct spdk_env_opts env_opts;
+    int rc = 0;    
     char input_file_name[68];
-
-    int rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
+    rc = parse_args(argc, argv, input_file_name, sizeof(input_file_name));
     if (rc != 0) {
         return rc;
     }
@@ -472,39 +655,87 @@ main(int argc, char **argv)
         exit(1);
     }
 
+    /* Read input file */
     FILE *fptr = fopen(input_file_name, "rb");
     if (fptr == NULL) {
-        fprintf(stderr, "Failed to open input file %s\n", input_file_name);
-        return -1; 
-    }
+        fprintf(stderr, "Failed to open input file %s\n", input_file_name);                                                                                                                                
+        return 1;  
+    }   
 
     fseek(fptr, 0, SEEK_END);
     int file_size = ftell(fptr);
     rewind(fptr);
     int entry_cnt = file_size / sizeof(struct bin_file_data);
 
-    struct bin_file_data buffer[entry_cnt];    
+    struct bin_file_data buffer[entry_cnt]; 
  
     size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
-    if (read_val != (size_t)entry_cnt)
+    if (read_val != (size_t)entry_cnt) {
         fprintf(stderr, "Fail to read input file\n");
+        return 1;
+    }   
     fclose(fptr);
 
+    /* Initialize env */
+    struct spdk_env_opts env_opts;
     spdk_env_opts_init(&env_opts);
     env_opts.name = "trace_io_analysis";
-    if (spdk_env_init(&env_opts) < 0) {
+    rc = spdk_env_init(&env_opts);
+    if (rc < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");
-        return 1;
+        return rc;
     }
 
+    /* In order to get namespace information, we need to initialize NVMe controller */
+    /* Get trid */
+    spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
+    snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
+
+    /* Register ctrlr & register ns */
+    printf("Initializing NVMe Controllers\n");
+    
+    rc = spdk_nvme_probe(&g_trid, NULL, probe_cb, attach_cb, NULL);
+    if (rc != 0) {
+        fprintf(stderr, "spdk_nvme_probe() failed\n");
+        cleanup();
+    }
+    
+    if (TAILQ_EMPTY(&g_controllers)) {
+        fprintf(stderr, "no NVMe controllers found\n");
+        cleanup();
+    }
+    printf("Initialization complete.\n");
+
+    /* Get namespace data */
+    get_ns_info();
+    cleanup();
+    printf("Number of blocks per namespace = 0x%lx\n", g_ns_block);
+    uint16_t *r_blk = (uint16_t *)malloc(g_ns_block * sizeof(uint16_t));
+    if (!r_blk) {
+        fprintf(stderr, "Fall to allocate memory for r_blk\n");
+        rc = 1;
+        return rc;
+    }
+    uint16_t *w_blk = (uint16_t *)malloc(g_ns_block * sizeof(uint16_t));
+    if (!w_blk) {
+        fprintf(stderr, "Fall to allocate memory for w_blk\n");
+        free(r_blk);
+        rc = 1;
+        return rc;
+    }
+    memset(r_blk, 0, g_ns_block * sizeof(r_blk[0]));
+    memset(w_blk, 0, g_ns_block * sizeof(w_blk[0])); 
+
+    /* Process trace entry */
     for (int i = 0; i < entry_cnt; i++) {
-        rc = process_entry(&buffer[i]);
+        rc = process_entry(&buffer[i], r_blk, w_blk);
         if (rc != 0) {
             fprintf(stderr, "Parse error\n");
-            return 1;
+            goto exit;
         }
     }
 
+    /* Trace analysis */
     print_uline('=', printf("\nTrace Analysis\n")); 
     printf("%-15s  ", "Access pattern");
     printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n", 
@@ -519,6 +750,24 @@ main(int argc, char **argv)
     printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
             g_latency_us_min, g_latency_us_max, g_latency_us_avg);
 
+    for (uint64_t i = 0, cnt = 0; i < g_ns_block; i++) {
+        if (!r_blk[i] && !w_blk[i])
+            continue;
+        cnt++;
+        printf("0x%016lx  ", i);
+        printf("r %-5d ", r_blk[i]);
+        printf("w %-5d ", w_blk[i]);
+        printf("r+w %-5d ", r_blk[i] + w_blk[i]);
+        if (cnt % 4 == 0)
+            printf("\n");
+    }
+    printf("\n");
+
+    exit:
+    if (r_blk)
+        free(r_blk);
+    if (w_blk)
+        free(w_blk);
     spdk_env_fini();
-    return 0;
+    return rc;
 }

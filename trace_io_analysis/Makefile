@@ -4,11 +4,7 @@
 #
 
 SPDK_ROOT_DIR := $(CURDIR)/../../spdk
-include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
 APP = trace_io_analysis
-C_SRCS := trace_io_analysis.c
 
-SPDK_LIB_LIST = event
-
-include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
+include $(SPDK_ROOT_DIR)/mk/nvme.libtest.mk
