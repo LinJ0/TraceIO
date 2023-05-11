@@ -295,43 +295,6 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
     }   
     return rc;    
 }
-/*
-static int
-process_analysis_trace(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
-{
-    int rc;
-
-    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
-    if (rc) {
-        printf("Unknown Opcode\n");
-        return rc;
-    }
-
-    if (!g_tsc_rate) {
-        g_tsc_rate = d->tsc_rate;
-    }
-
-    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        latency_min_max(d->tsc_sc_time, d->tsc_rate);
-        latency_total(d->tsc_sc_time);
-    }
-
-    uint64_t slba = 0;    
-    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
-        slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
-
-        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
-            uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
-            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
-        }
-    }
-    if (rc) {
-        printf("Count block read / write fail\n");
-        return rc;
-    }
-
-    return rc;
-}*/
 
 static int
 process_latency_iosize(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_iosize)
