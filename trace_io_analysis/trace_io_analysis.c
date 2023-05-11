@@ -1,4 +1,3 @@
-
 #include "spdk/env.h"
 #include "spdk/likely.h"
 #include "spdk/string.h"
@@ -26,9 +25,8 @@ static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_contro
 static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
 static struct spdk_nvme_transport_id g_trid = {};
 static bool g_print_tsc = false;
-static bool g_print_io = false;
+static bool g_print_trace = false;
 static bool g_input_file = false;
-static uint64_t g_ns_block = 0; /* number of blocks in a namespace */
 
 static float
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
@@ -152,17 +150,19 @@ rw_ratio(uint64_t *read, uint64_t *write)
 }
 
 static int
-rw_counter(uint8_t opc, uint64_t *read, uint64_t *write)
+iosize_rw_counter(uint8_t opc, uint32_t nlb, uint32_t *r_iosize, uint32_t *w_iosize)
 {
     switch (opc) {
     case NVME_OPC_READ:
     case NVME_OPC_COMPARE: 
-        (*read)++;
+        g_read_cnt++;
+        r_iosize[nlb]++;
         break;
     case NVME_OPC_WRITE:
     case NVME_ZNS_OPC_ZONE_APPEND:
     case NVME_OPC_WRITE_ZEROES:
-        (*write)++;
+        g_write_cnt++;
+        w_iosize[nlb]++;
         break;
     case NVME_OPC_WRITE_UNCORRECTABLE:
     case NVME_OPC_COPY:
@@ -189,9 +189,8 @@ struct latency {
 
 static TAILQ_HEAD(latency_list, latency) g_latency_sum = TAILQ_HEAD_INITIALIZER(g_latency_sum);
 static uint64_t g_tsc_rate = 0;
-static uint64_t g_latency_tsc_min = 0, g_latency_tsc_max = 0;
+static uint64_t g_latency_tsc_min = 0, g_latency_tsc_max = 0, g_latency_tsc_avg = 0;
 static float g_latency_us_min = 0.0, g_latency_us_max = 0.0, g_latency_us_avg = 0.0;
-static float g_latency_tsc_avg = 0;
 
 static void
 latency_min_max(uint64_t tsc_sc_time, uint64_t tsc_rate)
@@ -296,8 +295,92 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
     }   
     return rc;    
 }
+/*
+static int
+process_analysis_trace(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
+{
+    int rc;
+
+    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
+    if (rc) {
+        printf("Unknown Opcode\n");
+        return rc;
+    }
+
+    if (!g_tsc_rate) {
+        g_tsc_rate = d->tsc_rate;
+    }
+
+    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
+        latency_min_max(d->tsc_sc_time, d->tsc_rate);
+        latency_total(d->tsc_sc_time);
+    }
+
+    uint64_t slba = 0;    
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
+        slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
+
+        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
+            uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
+            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
+        }
+    }
+    if (rc) {
+        printf("Count block read / write fail\n");
+        return rc;
+    }
+
+    return rc;
+}*/
+
+static int
+process_latency_iosize(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_iosize)
+{
+    if (!g_tsc_rate) { /* for calculate g_latency_us_avg */
+        g_tsc_rate = d->tsc_rate;
+    }
+
+    int rc;
+    uint32_t nlb = d->cdw12 & UINT16BIT_MASK;
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0) {
+        rc = iosize_rw_counter(d->opc, nlb, r_iosize, w_iosize);
+        if (rc) {
+            printf("Unknown Opcode\n");
+            return rc;
+        }
+    }
+
+    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
+        latency_min_max(d->tsc_sc_time, d->tsc_rate);
+        latency_total(d->tsc_sc_time);
+    }
+
+    return rc;
+}
+
+static int
+process_num_rw(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
+{
+    int rc;
+    uint64_t slba = 0;    
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
+        slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
+
+        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
+            uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
+            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
+        }
+    }
+    if (rc) {
+        printf("Count block read / write fail\n");
+        return rc;
+    }
+
+    return rc;
+}
 /* trace analysis end */
 
+/* print trace start */
 static const char *
 format_argname(const char *name)
 {
@@ -464,65 +547,34 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 }
 
 static int
-process_entry(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
+process_print_trace(struct bin_file_data *d)
 {
-    int     rc;
-    float   timestamp_us;
-    float   sctime_us;
+    int     rc = 0;
     const char *opc_name;
     const char *zone_act_name;
     bool cdw10 = false;
     bool cdw11 = false;
     bool cdw12 = false;
     bool cdw13 = false;
+    uint64_t slba = 0;
 
-    rc = rw_counter(d->opc, &g_read_cnt, &g_write_cnt);
-    if (rc) {
-        printf("Unknown Opcode\n");
-        return 1;
-    }
-
-    if (!g_tsc_rate) {
-        g_tsc_rate = d->tsc_rate;
-    }
-
-    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        latency_min_max(d->tsc_sc_time, d->tsc_rate);
-        latency_total(d->tsc_sc_time);
-    }
-
-    uint64_t slba = 0;    
-    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
-        slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
-
-        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
-            uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
-            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
-        }
-    }
-    if (rc) {
-        printf("Count block read / write fail\n");
-        return 1;
-    }
-
-    /* 
-     * print lcore & tsc_base (us) & tpoint name & object id
-     */
-    if (g_print_io) {
-        timestamp_us = get_us_from_tsc(d->tsc_timestamp, d->tsc_rate);
-        printf("core%2d: %16.3f  ", d->lcore, timestamp_us);
+    /* print lcore & tsc_base (us) & tpoint name & object id */
+    float timestamp_us = get_us_from_tsc(d->tsc_timestamp, d->tsc_rate);
+    printf("core%2d: %16.3f  ", d->lcore, timestamp_us);
     
-        if (g_print_tsc) {
-            printf("(%10ju)  ", d->tsc_timestamp);
-        }
-        printf("%-20s ", d->tpoint_name);
-        print_ptr("object", d->obj_id);
+    if (g_print_tsc) {
+        printf("(%10ju)  ", d->tsc_timestamp);
     }
+    printf("%-20s ", d->tpoint_name);
+    print_ptr("object", d->obj_id);
+
     
-    /* 
-     * print process nvme submit / complete
-     */
-    if (g_print_io && strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0) {
+    /* print process nvme submit / complete */
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") && strcmp(d->tpoint_name, "NVME_IO_COMPLETE")) {
+        rc = 1;
+    }
+
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0) {
         set_opc_name(d->opc, &opc_name);
         set_opc_flags(d->opc, &cdw10, &cdw11, &cdw12, &cdw13);
         printf("%-20s ", opc_name);
@@ -560,12 +612,11 @@ process_entry(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
             printf("%-20.20s ", zone_act_name);
         }
         printf("\n");
-        rc = 0;
     }
     
-    if (g_print_io && strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
+    if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
         if (d->tsc_sc_time) {
-            sctime_us = get_us_from_tsc(d->tsc_sc_time, d->tsc_rate);
+            float sctime_us = get_us_from_tsc(d->tsc_sc_time, d->tsc_rate);
             print_float("time", sctime_us);
         }
 
@@ -573,16 +624,18 @@ process_entry(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
         print_ptr("comp", d->cpl & (uint64_t)0x1);
         print_ptr("status", (d->cpl >> 1) & (uint64_t)0x7FFF);
         printf("\n");
-        rc = 0;
     }
 
-    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") && strcmp(d->tpoint_name, "NVME_IO_COMPLETE")) {
-        rc = 1;
-    }
     return rc;
 }
+/* print trace end */
 
 /* Get namespace data start */
+static uint64_t g_ns_block = 0; /* number of blocks in a namespace */
+static size_t g_max_transfer_block = 0;
+static bool g_zone = false;
+static uint64_t g_zone_size_lba = 0;
+static uint64_t g_total_zones = 0;
 static void
 get_ns_info(void)
 {
@@ -594,8 +647,15 @@ get_ns_info(void)
 
     const struct spdk_nvme_ns_data *ndata = spdk_nvme_ns_get_data(ns_entry->ns);
     g_ns_block = ndata->ncap;
-}
+    g_max_transfer_block = spdk_nvme_ns_get_max_io_xfer_size(ns_entry->ns);
 
+    if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
+        g_zone = true;
+        g_zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
+        g_total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
+    }
+
+}
 /* Get namespace data end */
 
 static void
@@ -621,7 +681,7 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
             snprintf(file_name, file_name_size, "%s", optarg);
             break;
         case 'd':
-            g_print_io = true;
+            g_print_trace = true;
             break;
         case 't':
             g_print_tsc = true;
@@ -645,7 +705,7 @@ main(int argc, char **argv)
         return rc;
     }
 
-    if (!g_print_io && g_print_tsc) {
+    if (!g_print_trace && g_print_tsc) {
         fprintf(stderr, "-t must be used with -d \n");
         exit(1);
     }
@@ -658,7 +718,7 @@ main(int argc, char **argv)
     /* Read input file */
     FILE *fptr = fopen(input_file_name, "rb");
     if (fptr == NULL) {
-        fprintf(stderr, "Failed to open input file %s\n", input_file_name);                                                                                                                                
+        fprintf(stderr, "Failed to open input file %s\n", input_file_name);
         return 1;  
     }   
 
@@ -686,6 +746,19 @@ main(int argc, char **argv)
         return rc;
     }
 
+    /* print trace */
+    print_uline('=', printf("\nPrint I/O Trace\n"));
+    if (g_print_trace) {
+        for (int i = 0; i < entry_cnt; i++) {
+            rc = process_print_trace(&buffer[i]);
+            if (rc != 0) {
+                fprintf(stderr, "Parse error\n");
+                return rc;
+            }
+        }
+    }
+    printf("\n");
+
     /* In order to get namespace information, we need to initialize NVMe controller */
     /* Get trid */
     spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
@@ -710,6 +783,73 @@ main(int argc, char **argv)
     get_ns_info();
     cleanup();
     printf("Number of blocks per namespace = 0x%lx\n", g_ns_block);
+    printf("Namespace max transfer block: %lu\n", g_max_transfer_block);
+
+    /*
+     * Trace analysis: 
+     * 1. Latency in tsc (time stamp counter) and in us
+     * 2. Total number of read write
+     * 3. IO size
+     */
+    uint32_t *r_iosize = (uint32_t *)malloc(g_max_transfer_block * sizeof(uint32_t));
+    if (!r_iosize) {
+        fprintf(stderr, "Fall to allocate memory for r_iosize\n");
+        rc = 1;
+        return rc;
+    }
+    uint32_t *w_iosize = (uint32_t *)malloc(g_max_transfer_block * sizeof(uint32_t));
+    if (!w_iosize) {
+        fprintf(stderr, "Fall to allocate memory for w_iosize\n");
+        rc = 1;
+        free(r_iosize);
+        return rc;
+    }
+
+    memset(r_iosize, 0, g_max_transfer_block * sizeof(uint32_t));
+    memset(w_iosize, 0, g_max_transfer_block * sizeof(uint32_t));
+    
+    for (int i = 0; i < entry_cnt; i++) {
+        rc = process_latency_iosize(&buffer[i], r_iosize, w_iosize);
+        if (rc != 0) {
+            fprintf(stderr, "Parse error\n");
+            free(r_iosize);
+            free(w_iosize);
+            return rc;
+        }
+    }
+
+    print_uline('=', printf("\nTrace Analysis\n"));
+    latency_avg(entry_cnt >> 1);
+    printf("%-15s  ", "Latency (tsc)");
+    printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20ld\n",
+            g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
+
+    printf("%-15s  ", "Latency (us)");
+    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
+            g_latency_us_min, g_latency_us_max, g_latency_us_avg);
+
+    printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n",
+            g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt));
+    
+    print_uline('=', printf("\nI/O size\n"));
+    for (uint64_t i = 0; i < g_max_transfer_block; i++) {
+        if (!r_iosize[i] && !w_iosize[i])
+            continue;
+        printf("%ld blocks  ", i + 1); 
+        printf("r %-5d ", r_iosize[i]);
+        printf("w %-5d ", w_iosize[i]);
+        printf("r+w %-5d ", r_iosize[i] + w_iosize[i]);
+        printf("\n");
+    }
+    free(r_iosize);
+    free(w_iosize);
+
+    /*
+     * Trace analysis: 
+     * 4. The number of R/W in a block
+     * 5. The number of R/W in a zone (if the block device is ZNS SSD)
+     */
+
     uint16_t *r_blk = (uint16_t *)malloc(g_ns_block * sizeof(uint16_t));
     if (!r_blk) {
         fprintf(stderr, "Fall to allocate memory for r_blk\n");
@@ -723,34 +863,24 @@ main(int argc, char **argv)
         rc = 1;
         return rc;
     }
-    memset(r_blk, 0, g_ns_block * sizeof(r_blk[0]));
-    memset(w_blk, 0, g_ns_block * sizeof(w_blk[0])); 
+    memset(r_blk, 0, g_ns_block * sizeof(uint16_t));
+    memset(w_blk, 0, g_ns_block * sizeof(uint16_t)); 
 
-    /* Process trace entry */
+    uint16_t r_zone[g_total_zones], w_zone[g_total_zones];
+    memset(r_zone, 0, g_total_zones * sizeof(uint16_t));
+    memset(w_zone, 0, g_total_zones * sizeof(uint16_t));
+
     for (int i = 0; i < entry_cnt; i++) {
-        rc = process_entry(&buffer[i], r_blk, w_blk);
+        rc = process_num_rw(&buffer[i], r_blk, w_blk);
         if (rc != 0) {
             fprintf(stderr, "Parse error\n");
-            goto exit;
+            free(r_blk);
+            free(w_blk);
         }
     }
 
-    /* Trace analysis */
-    print_uline('=', printf("\nTrace Analysis\n")); 
-    printf("%-15s  ", "Access pattern");
-    printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n", 
-            g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt)); 
-    
-    latency_avg(entry_cnt >> 1);
-    printf("%-15s  ", "Latency (tsc)");
-    printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20.3f\n", 
-            g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
-
-    printf("%-15s  ", "Latency (us)");
-    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
-            g_latency_us_min, g_latency_us_max, g_latency_us_avg);
-
-    for (uint64_t i = 0, cnt = 0; i < g_ns_block; i++) {
+    print_uline('=', printf("\nNumber of R/W in a block\n"));    
+    for (uint64_t i = 0, cnt = 0, zidx = 0; i < g_ns_block; i++) {
         if (!r_blk[i] && !w_blk[i])
             continue;
         cnt++;
@@ -758,16 +888,36 @@ main(int argc, char **argv)
         printf("r %-5d ", r_blk[i]);
         printf("w %-5d ", w_blk[i]);
         printf("r+w %-5d ", r_blk[i] + w_blk[i]);
+
+        if (g_zone) {
+        zidx = i / g_zone_size_lba;
+        r_zone[zidx] += r_blk[i];
+        w_zone[zidx] += w_blk[i];
+        }
+
         if (cnt % 4 == 0)
             printf("\n");
     }
     printf("\n");
 
-    exit:
-    if (r_blk)
-        free(r_blk);
-    if (w_blk)
-        free(w_blk);
+    if (g_zone) {
+        print_uline('=', printf("\nNumber of R/W in a zone\n"));
+        for (uint64_t i = 0, cnt = 0; i < g_total_zones; i++) {
+            if (!r_zone[i] && !w_zone[i])
+                continue;
+            cnt++;
+            printf("zone %-13ld  ", i); 
+            printf("r %-5d ", r_zone[i]);
+            printf("w %-5d ", w_zone[i]);
+            printf("r+w %-5d ", r_zone[i] + w_zone[i]);
+            if (cnt % 4 == 0)
+                printf("\n");
+        }
+        printf("\n");
+    }
+
+    free(r_blk);
+    free(w_blk);
     spdk_env_fini();
     return rc;
 }
