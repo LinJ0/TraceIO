@@ -240,7 +240,7 @@ main(int argc, char **argv)
             continue;
         } else if (entry.args[0].integer) { 
             continue;   
-        } else if (entry.object_start & (uint64_t)1 << 31) {
+        } else if (entry.object_start & (uint64_t)1 << 63) {
             continue;
         }
 
