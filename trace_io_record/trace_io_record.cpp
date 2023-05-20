@@ -276,19 +276,19 @@ main(int argc, char **argv)
         for (int i = 0; i < entry_cnt; i++) {
             printf("tsc_timestamp: %20ld  ", buffer[i].tsc_timestamp);
             printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
-            printf("opc: %2d  ", buffer[i].opc); 
             //printf("lcore: %d  ", buffer[i].lcore);
             //printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-            printf("cid: %3d  ", buffer[i].cid);            
-            printf("obj_id: %ld  ", buffer[i].obj_id);
+            //printf("cid: %3d  ", buffer[i].cid);                                                                                                                                                                 
+            //printf("obj_id: %ld  ", buffer[i].obj_id);
             printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
             printf("obj_start_time: %15ld  ", buffer[i].obj_start);
             //printf("nsid: %d  ", buffer[i].nsid);
             //printf("cpl: %d  ", buffer[i].cpl);
-            //printf("cdw10: %d  ", buffer[i].cdw10);
-            //printf("cdw11: %d  ", buffer[i].cdw11);
-            //printf("cdw12: %d  ", buffer[i].cdw12);
-            //printf("cdw13: %d  ", buffer[i].cdw13);
+            printf("opc: 0x%2x  ", buffer[i].opc); 
+            printf("cdw10: 0x%x  ", buffer[i].cdw10);
+            printf("cdw11: 0x%x  ", buffer[i].cdw11);
+            printf("cdw12: 0x%x  ", buffer[i].cdw12);
+            printf("cdw13: 0x%x  ", buffer[i].cdw13);
             printf("\n");
         }
     }

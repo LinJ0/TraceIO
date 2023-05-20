@@ -7,6 +7,7 @@
 #include "spdk/nvme.h"
 #include "spdk/vmd.h"
 #include "spdk/nvme_zns.h"
+#include "spdk/nvme_spec.h"
 #include "spdk/log.h"
 #include "../include/trace_io.h"
 
@@ -91,14 +92,6 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 
     printf("Attached to %s\n", trid->traddr);
 
-    /*
-     * spdk_nvme_ctrlr is the logical abstraction in SPDK for an NVMe
-     * controller.  During initialization, the IDENTIFY data for the
-     * controller is read using an NVMe admin command, and that data
-     * can be retrieved using spdk_nvme_ctrlr_get_data() to get
-     * detailed information on the controller.  Refer to the NVMe
-     * specification for more details on IDENTIFY for NVMe controllers.
-     */
     cdata = spdk_nvme_ctrlr_get_data(ctrlr);
 
     snprintf(entry->name, sizeof(entry->name), "%-20.20s (%-20.20s)", cdata->mn, cdata->sn);
@@ -351,48 +344,49 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns); 
     char *replay_buf = (char *)spdk_zmalloc(nlb * block_size, block_size,
                              NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+    if (!replay_buf) {
+        perror("Fail to malloc replay_buf");
+        exit(1);
+    }   
     /* read write replay */
     outstanding_commands = 0;
 
     switch (d->opc) {
-    case NVME_OPC_READ:
-    case NVME_OPC_COMPARE:
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_COMPARE:
         rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
-    case NVME_OPC_WRITE:
-    case NVME_ZNS_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_ZONE_APPEND:
         memset(replay_buf, 1, (size_t)nlb * block_size);
         rc = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
+        rc = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, NULL, 0);
+        break;
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
         bool select_all = (d->cdw13 & (uint32_t)1 << 8) ? true : false;
         uint8_t zone_action = (uint8_t)(d->cdw13 & UINT8BIT_MASK);
-        switch (zone_action) {
-        case NVME_ZNS_MGMT_SEND_ACTION_OPEN:
+        if (zone_action == SPDK_NVME_ZONE_OPEN)
             rc = spdk_nvme_zns_open_zone(ns, qpair, slba, select_all, replay_complete, NULL);
-            break;
-        case NVME_ZNS_MGMT_SEND_ACTION_CLOSE:
+        else if (zone_action == SPDK_NVME_ZONE_CLOSE)
             rc = spdk_nvme_zns_close_zone(ns, qpair, slba, select_all, replay_complete, NULL);
-            break;
-        case NVME_ZNS_MGMT_SEND_ACTION_FINISH:
+        else if (zone_action == SPDK_NVME_ZONE_FINISH)
             rc = spdk_nvme_zns_finish_zone(ns, qpair, slba, select_all, replay_complete, NULL);
-            break;
-        case NVME_ZNS_MGMT_SEND_ACTION_RESET:
+        else if (zone_action == SPDK_NVME_ZONE_RESET)
             rc = spdk_nvme_zns_reset_zone(ns, qpair, slba, select_all, replay_complete, NULL);
-            break;
-        case NVME_ZNS_MGMT_SEND_ACTION_OFFLINE:
+        else if (zone_action == SPDK_NVME_ZONE_OFFLINE)
             rc = spdk_nvme_zns_offline_zone(ns, qpair, slba, select_all, replay_complete, NULL);
-            break;
-        default:
-            goto free_buf;
+        else {
+            outstanding_commands--;
         }
+        break;
     default:
-        goto free_buf;
+        outstanding_commands--;
     }
 
     if (rc) {
             fprintf(stderr, "Replay failed\n");
-            goto free_buf;
     } else {
             outstanding_commands++;
     }
@@ -401,7 +395,6 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
         spdk_nvme_qpair_process_completions(qpair, 0);
     }
     
-    free_buf:
     spdk_free(replay_buf);
     return rc;
 }
@@ -417,28 +410,31 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns);
     char *replay_buf = (char *)spdk_zmalloc(nlb * block_size, block_size,
                              NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+    if (!replay_buf) {
+        perror("Fail to malloc replay_buf");
+        exit(1);                                                                                                                                                                                           
+    }
     /* read write replay */
     outstanding_commands = 0;
 
     switch (d->opc) {
-    case NVME_OPC_READ:
-    case NVME_OPC_COMPARE:
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_COMPARE:
         rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
-    case NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_WRITE:
         memset(replay_buf, 1, (size_t)nlb * block_size);
         rc = spdk_nvme_ns_cmd_write(ns, qpair, replay_buf, slba, nlb, replay_complete, NULL, 0);
         break;
-    case NVME_OPC_WRITE_ZEROES:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
         rc = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, NULL, 0);
         break;
     default:
-        goto free_buf;
+        outstanding_commands--; 
     }
 
     if (rc) {
             fprintf(stderr, "Replay failed\n");
-            goto free_buf;
     } else {
             outstanding_commands++;
     }
@@ -447,7 +443,6 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
         spdk_nvme_qpair_process_completions(qpair, 0);
     }
     
-    free_buf:
     spdk_free(replay_buf);
     return rc;
 }

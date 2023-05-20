@@ -6,6 +6,7 @@
 #include "spdk/nvme.h"
 #include "spdk/vmd.h"
 #include "spdk/nvme_zns.h"
+#include "spdk/nvme_spec.h"
 #include "../include/trace_io.h"
 
 struct ctrlr_entry {
@@ -153,28 +154,28 @@ static int
 iosize_rw_counter(uint8_t opc, uint32_t nlb, uint32_t *r_iosize, uint32_t *w_iosize)
 {
     switch (opc) {
-    case NVME_OPC_READ:
-    case NVME_OPC_COMPARE: 
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_COMPARE: 
         g_read_cnt++;
         r_iosize[nlb]++;
         break;
-    case NVME_OPC_WRITE:
-    case NVME_ZNS_OPC_ZONE_APPEND:
-    case NVME_OPC_WRITE_ZEROES:
+    case SPDK_NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
         g_write_cnt++;
         w_iosize[nlb]++;
         break;
-    case NVME_OPC_WRITE_UNCORRECTABLE:
-    case NVME_OPC_COPY:
-    case NVME_OPC_VERIFY:
-    case NVME_OPC_DATASET_MANAGEMENT:
-    case NVME_OPC_FLUSH:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-    case NVME_OPC_RESERVATION_REGISTER: 
-    case NVME_OPC_RESERVATION_REPORT:
-    case NVME_OPC_RESERVATION_ACQUIRE:
-    case NVME_OPC_RESERVATION_RELEASE:
+    case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
+    case SPDK_NVME_OPC_COPY:
+    case SPDK_NVME_OPC_VERIFY:
+    case SPDK_NVME_OPC_DATASET_MANAGEMENT:
+    case SPDK_NVME_OPC_FLUSH:
+    case SPDK_NVME_OPC_ZONE_MGMT_RECV:
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
+    case SPDK_NVME_OPC_RESERVATION_REGISTER: 
+    case SPDK_NVME_OPC_RESERVATION_REPORT:
+    case SPDK_NVME_OPC_RESERVATION_ACQUIRE:
+    case SPDK_NVME_OPC_RESERVATION_RELEASE:
         break;
     default:
         return -1;
@@ -264,30 +265,30 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
     uint64_t idx = slba;
 
     switch (opc) {
-    case NVME_OPC_READ:
-    case NVME_OPC_COMPARE: 
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_COMPARE: 
         for (int i = 0; i < nlb; i++) {
             r_blk[idx + i]++;
         }
         break;        
-    case NVME_OPC_WRITE:
-    case NVME_ZNS_OPC_ZONE_APPEND:
-    case NVME_OPC_WRITE_ZEROES:
+    case SPDK_NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
         for (int i = 0; i < nlb; i++) {
             w_blk[idx + i]++;
         }
         break;
-    case NVME_OPC_WRITE_UNCORRECTABLE:
-    case NVME_OPC_COPY:
-    case NVME_OPC_VERIFY:
-    case NVME_OPC_DATASET_MANAGEMENT:
-    case NVME_OPC_FLUSH:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
-    case NVME_OPC_RESERVATION_REGISTER: 
-    case NVME_OPC_RESERVATION_REPORT:
-    case NVME_OPC_RESERVATION_ACQUIRE:
-    case NVME_OPC_RESERVATION_RELEASE:
+    case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
+    case SPDK_NVME_OPC_COPY:
+    case SPDK_NVME_OPC_VERIFY:
+    case SPDK_NVME_OPC_DATASET_MANAGEMENT:
+    case SPDK_NVME_OPC_FLUSH:
+    case SPDK_NVME_OPC_ZONE_MGMT_RECV:
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
+    case SPDK_NVME_OPC_RESERVATION_REGISTER: 
+    case SPDK_NVME_OPC_RESERVATION_REPORT:
+    case SPDK_NVME_OPC_RESERVATION_ACQUIRE:
+    case SPDK_NVME_OPC_RESERVATION_RELEASE:
         break;
     default:
         rc = 1;
@@ -374,32 +375,35 @@ print_float(const char *arg_string, float arg)
 static void
 set_zone_act_name (uint8_t opc, uint64_t zone_act, const char **zone_act_name) 
 {
-    if (opc ==  NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND) {
+    if (opc ==  SPDK_NVME_OPC_ZONE_MGMT_SEND) {
         switch (zone_act) {
-        case NVME_ZNS_MGMT_SEND_ACTION_OPEN:
-            *zone_act_name = "OPEN ZONE";
-            break;
-        case NVME_ZNS_MGMT_SEND_ACTION_CLOSE:
+        case SPDK_NVME_ZONE_CLOSE:
             *zone_act_name = "CLOSE ZONE";
             break;
-        case NVME_ZNS_MGMT_SEND_ACTION_FINISH:
+        case SPDK_NVME_ZONE_FINISH:
             *zone_act_name = "FINISH ZONE";
             break;
-        case NVME_ZNS_MGMT_SEND_ACTION_RESET:
+        case SPDK_NVME_ZONE_OPEN:
+            *zone_act_name = "OPEN ZONE";
+            break;
+        case SPDK_NVME_ZONE_RESET:
             *zone_act_name = "RESET ZONE";
             break;
-        case NVME_ZNS_MGMT_SEND_ACTION_OFFLINE:
+        case SPDK_NVME_ZONE_OFFLINE:
             *zone_act_name = "OFFLINE ZONE";
+            break;
+        case SPDK_NVME_ZONE_SET_ZDE:
+            *zone_act_name = "SET ZONE DESC";
             break;
         default:
             break;
         }
-    } else if (opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV){
+    } else if (opc == SPDK_NVME_OPC_ZONE_MGMT_RECV){
         switch (zone_act) {
-        case NVME_ZNS_MGMT_RECV_ACTION_REPORT_ZONES:
+        case SPDK_NVME_ZONE_REPORT:
             *zone_act_name = "REPORT ZONE";
             break;
-        case NVME_ZNS_MGMT_RECV_ACTION_EXTENDED_REPORT_ZONES:
+        case SPDK_NVME_ZONE_EXTENDED_REPORT:
             *zone_act_name = "EXT REPORT ZONE";
             break;
         default:
@@ -414,52 +418,52 @@ static void
 set_opc_name(uint64_t opc, const char **opc_name)
 {
     switch (opc) {
-    case NVME_OPC_FLUSH:
+    case SPDK_NVME_OPC_FLUSH:
         *opc_name = "FLUSH";
         break;
-    case NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_WRITE:
         *opc_name = "WRITE";
         break;
-    case NVME_OPC_READ:
+    case SPDK_NVME_OPC_READ:
         *opc_name = "READ";
         break;
-    case NVME_OPC_WRITE_UNCORRECTABLE:
+    case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
         *opc_name = "WRITE UNCORRECTABLE";
         break;
-    case NVME_OPC_COMPARE:
+    case SPDK_NVME_OPC_COMPARE:
         *opc_name = "COMPARE";
         break;
-    case NVME_OPC_WRITE_ZEROES:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
         *opc_name = "WRITE ZEROES";
         break;
-    case NVME_OPC_DATASET_MANAGEMENT:
+    case SPDK_NVME_OPC_DATASET_MANAGEMENT:
         *opc_name = "DATASET MGMT";
         break;
-    case NVME_OPC_VERIFY:
+    case SPDK_NVME_OPC_VERIFY:
         *opc_name = "VERIFY";
         break;
-    case NVME_OPC_RESERVATION_REGISTER: 
+    case SPDK_NVME_OPC_RESERVATION_REGISTER: 
         *opc_name = "RESERVATION REGISTER";
         break; 
-    case NVME_OPC_RESERVATION_REPORT: 
+    case SPDK_NVME_OPC_RESERVATION_REPORT: 
         *opc_name = "RESERVATION REPORT";
         break;
-    case NVME_OPC_RESERVATION_ACQUIRE: 
+    case SPDK_NVME_OPC_RESERVATION_ACQUIRE: 
         *opc_name = "RESERVATION ACQUIRE";
         break;
-    case NVME_OPC_RESERVATION_RELEASE:
+    case SPDK_NVME_OPC_RESERVATION_RELEASE:
         *opc_name = "RESERVATION RELEASE";
         break;
-    case NVME_OPC_COPY:
+    case SPDK_NVME_OPC_COPY:
         *opc_name = "COPY";
         break;
-    case NVME_ZNS_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_ZONE_APPEND:
         *opc_name = "ZONE APPEND";
         break;
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
         *opc_name = "ZONE MGMT SEND";
         break;
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+    case SPDK_NVME_OPC_ZONE_MGMT_RECV:
         *opc_name = "ZONE MGMT RECV";
         break;
     default:
@@ -472,37 +476,37 @@ static void
 set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 {
     switch (opc) {
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV:
+    case SPDK_NVME_OPC_ZONE_MGMT_RECV:
         *cdw10 = true;
         *cdw11 = true;
         *cdw12 = true;
         *cdw13 = true; 
         break;
-    case NVME_OPC_WRITE:
-    case NVME_OPC_READ:
-    case NVME_OPC_WRITE_UNCORRECTABLE:
-    case NVME_OPC_COMPARE:
-    case NVME_OPC_WRITE_ZEROES:
-    case NVME_OPC_VERIFY:
-    case NVME_OPC_COPY:
-    case NVME_ZNS_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
+    case SPDK_NVME_OPC_COMPARE:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
+    case SPDK_NVME_OPC_VERIFY:
+    case SPDK_NVME_OPC_COPY:
+    case SPDK_NVME_OPC_ZONE_APPEND:
         *cdw10 = true;
         *cdw11 = true;
         *cdw12 = true;
         break;
-    case NVME_OPC_DATASET_MANAGEMENT:
+    case SPDK_NVME_OPC_DATASET_MANAGEMENT:
         *cdw10 = true;
         break;
-    case NVME_ZNS_OPC_ZONE_MANAGEMENT_SEND:
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
         *cdw10 = true;
         *cdw11 = true;
         *cdw13 = true;
         break;
-    case NVME_OPC_FLUSH:
-    case NVME_OPC_RESERVATION_REGISTER: 
-    case NVME_OPC_RESERVATION_REPORT:
-    case NVME_OPC_RESERVATION_ACQUIRE:
-    case NVME_OPC_RESERVATION_RELEASE:
+    case SPDK_NVME_OPC_FLUSH:
+    case SPDK_NVME_OPC_RESERVATION_REGISTER: 
+    case SPDK_NVME_OPC_RESERVATION_REPORT:
+    case SPDK_NVME_OPC_RESERVATION_ACQUIRE:
+    case SPDK_NVME_OPC_RESERVATION_RELEASE:
         break;
     default:
         break;
@@ -545,7 +549,7 @@ process_print_trace(struct bin_file_data *d)
         print_ptr("nsid", d->nsid);
 
         if (cdw10) { /* slba_l64b | nr_8b (dataset_mgmt) */
-            if (d->opc != NVME_OPC_DATASET_MANAGEMENT)
+            if (d->opc != SPDK_NVME_OPC_DATASET_MANAGEMENT)
                 slba = (uint64_t)d->cdw10;
             else 
                 print_ptr("nr", d->cdw10 & UINT8BIT_MASK);
@@ -554,7 +558,7 @@ process_print_trace(struct bin_file_data *d)
         if (cdw11) { /* slba_h64b */
             slba |= ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
             
-            if (d->opc != NVME_ZNS_OPC_ZONE_APPEND) {
+            if (d->opc != SPDK_NVME_OPC_ZONE_APPEND) {
                 print_ptr("slba", slba);
             } else {
                 print_ptr("zslba", slba);
@@ -562,9 +566,9 @@ process_print_trace(struct bin_file_data *d)
         }
 
         if (cdw12) { /* nlb_16b | nr_8b (copy) | ndw_32b (z_mgmt_recv) */
-            if (d->opc == NVME_OPC_COPY)
+            if (d->opc == SPDK_NVME_OPC_COPY)
                 print_uint64("range", (d->cdw12 & UINT8BIT_MASK) + 1);
-            else if (d->opc == NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV)
+            else if (d->opc == SPDK_NVME_OPC_ZONE_MGMT_RECV)
                 print_uint64("dword", (d->cdw12 & UINT32BIT_MASK) + 1);
             else
                 print_uint64("block", (d->cdw12 & UINT16BIT_MASK) + 1);
