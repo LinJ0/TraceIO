@@ -1,9 +1,0 @@
-trace_io_record
-
-# Prerequisites
-*.d
-
-# Object files
-*.o
-
-*.bin
