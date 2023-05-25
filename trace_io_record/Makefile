@@ -10,14 +10,14 @@ include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 APP = trace_io_record
 SPDK_NO_LINK_ENV = 1
 
-SPDK_LIB_LIST += json trace_parser
+SPDK_LIB_LIST += trace_parser
 
 CXX_SRCS := trace_io_record.cpp
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app_cxx.mk
 
-install: $(APP)
-	$(INSTALL_APP)
+#install: $(APP)
+#	$(INSTALL_APP)
 
-uninstall:
-	$(UNINSTALL_APP)
+#uninstall:
+#	$(UNINSTALL_APP)

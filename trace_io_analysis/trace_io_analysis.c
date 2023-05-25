@@ -327,10 +327,10 @@ process_num_rw(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
 {
     int rc;
     uint64_t slba = 0;    
-    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != NVME_OPC_DATASET_MANAGEMENT) {
+    if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != SPDK_NVME_OPC_DATASET_MANAGEMENT) {
         slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
 
-        if (d->opc != NVME_ZNS_OPC_ZONE_MANAGEMENT_RECV && d->opc != NVME_OPC_COPY) {
+        if (d->opc != SPDK_NVME_OPC_ZONE_MGMT_RECV && d->opc != SPDK_NVME_OPC_COPY) {
             uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
             rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
         }
@@ -714,8 +714,8 @@ main(int argc, char **argv)
     }
 
     /* print trace */
-    print_uline('=', printf("\nPrint I/O Trace\n"));
     if (g_print_trace) {
+        print_uline('=', printf("\nPrint I/O Trace\n"));
         for (int i = 0; i < entry_cnt; i++) {
             rc = process_print_trace(&buffer[i]);
             if (rc != 0) {
