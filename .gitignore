@@ -1,5 +1,7 @@
 bin/
 obj/
+app/bin/
+app/obj/
 
 *.d
 *.o

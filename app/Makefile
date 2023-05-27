@@ -2,8 +2,8 @@ SHELL_HACK := $(shell mkdir -p bin obj)
 
 # Directories
 APP_DIR := $(abspath $(CURDIR))
-APP_OBJ_DIR := $(TEST_DIR)/obj
-APP_BIN_DIR := $(TEST_DIR)/bin
+APP_OBJ_DIR := $(APP_DIR)/obj
+APP_BIN_DIR := $(APP_DIR)/bin
 
 APP_TARGETS := seqwrite
 

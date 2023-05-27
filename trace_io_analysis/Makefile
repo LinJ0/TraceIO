@@ -3,7 +3,7 @@
 #  All rights reserved.
 #
 
-SPDK_ROOT_DIR := $(CURDIR)/../../spdk
+#SPDK_ROOT_DIR := $(CURDIR)/../../spdk
 
 APP = trace_io_analysis
 
