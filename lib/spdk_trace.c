@@ -24,8 +24,9 @@ enable_spdk_trace(const char *app_name, const char *tpoint_group_name)
     }
 
     char *tpoint_group_str = NULL;
-    uint64_t tpoint_mask = -1ULL;
+    char *tpoint_group, *tpoints;
     uint64_t tpoint_group_mask;
+    uint64_t tpoint_mask = -1ULL;
 
     /* Save a pointer to the original value of the tpoint group mask string
      * to free later, because spdk_strsepq() modifies given char*. */
@@ -33,16 +34,46 @@ enable_spdk_trace(const char *app_name, const char *tpoint_group_name)
     char *end = NULL;
 
     while ((tpoint_group_str = spdk_strsepq(&tpoint_group_mask_str, ",")) != NULL) {
-        tpoint_group_mask = strtoull(tpoint_group_str, &end, 16);
-        if (*end != '\0') {
-            tpoint_group_mask = spdk_trace_create_tpoint_group_mask(tpoint_group_str);
-            if (tpoint_group_mask == 0) {
+        if (strchr(tpoint_group_str, ':')) {
+            /* Get the tpoint group mask */
+            tpoint_group = spdk_strsepq(&tpoint_group_str, ":");
+            /* Get the tpoint mask inside that group */
+            tpoints = spdk_strsepq(&tpoint_group_str, ":");
+
+            tpoint_group_mask = strtoull(tpoint_group, &end, 16);
+            if (*end != '\0') {
+                tpoint_group_mask = spdk_trace_create_tpoint_group_mask(tpoint_group);
+                if (tpoint_group_mask == 0) {
+                    error_found = true;
+                    break;
+                }
+            }
+            /* Check if tpoint group mask has only one bit set.
+             * This is to avoid enabling individual tpoints in
+             * more than one tracepoint group at once. */
+            if (!spdk_u64_is_pow2(tpoint_group_mask)) {
+                fprintf(stderr, "Tpoint group mask: %s contains multiple tpoint groups.\n", tpoint_group);
+                fprintf(stderr, "This is not supported, to prevent from activating tpoints by mistake.\n");
                 error_found = true;
                 break;
             }
-        }
-        tpoint_mask = -1ULL;
 
+            tpoint_mask = strtoull(tpoints, &end, 16);
+            if (*end != '\0') {
+                error_found = true;
+                break;
+            }
+        } else {
+            tpoint_group_mask = strtoull(tpoint_group_str, &end, 16);
+            if (*end != '\0') {
+                tpoint_group_mask = spdk_trace_create_tpoint_group_mask(tpoint_group_str);
+                if (tpoint_group_mask == 0) {
+                    error_found = true;
+                    break;
+                }
+            }
+            tpoint_mask = -1ULL;
+        }
         for (uint64_t group_id = 0; group_id < SPDK_TRACE_MAX_GROUP_ID; ++group_id) {
             if (tpoint_group_mask & (1 << group_id)) {
                 spdk_trace_set_tpoints(group_id, tpoint_mask);

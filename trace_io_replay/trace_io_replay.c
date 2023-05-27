@@ -9,8 +9,8 @@
 #include "spdk/nvme_zns.h"
 #include "spdk/nvme_spec.h"
 #include "spdk/log.h"
-#include "../include/trace_io.h"
-#include "../include/spdk_trace.h"
+#include "trace_io.h"
+#include "spdk_trace.h"
 
 struct ctrlr_entry {
     struct spdk_nvme_ctrlr *ctrlr;

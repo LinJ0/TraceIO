@@ -1,5 +1,6 @@
 #include <spdk/trace.h>
 #include <spdk/string.h>
+#include <spdk/util.h>
 
 #ifndef SPDK_TRACE_H
 #define SPDK_TRACE_H

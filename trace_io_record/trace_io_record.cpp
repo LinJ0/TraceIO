@@ -278,7 +278,7 @@ main(int argc, char **argv)
             printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
             //printf("lcore: %d  ", buffer[i].lcore);
             //printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-            //printf("cid: %3d  ", buffer[i].cid);                                                                                                                                                                 
+            //printf("cid: %3d  ", buffer[i].cid);
             //printf("obj_id: %ld  ", buffer[i].obj_id);
             printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
             printf("obj_start_time: %15ld  ", buffer[i].obj_start);

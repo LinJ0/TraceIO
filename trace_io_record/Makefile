@@ -4,6 +4,7 @@
 #
 
 SPDK_ROOT_DIR := $(CURDIR)/../../spdk
+
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
@@ -15,9 +16,3 @@ SPDK_LIB_LIST += trace_parser
 CXX_SRCS := trace_io_record.cpp
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app_cxx.mk
-
-#install: $(APP)
-#	$(INSTALL_APP)
-
-#uninstall:
-#	$(UNINSTALL_APP)

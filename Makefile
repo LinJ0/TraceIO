@@ -1,10 +1,19 @@
 SHELL_HACK := $(shell mkdir -p bin obj)
-OBJ_DIR := $(abspath $(CURDIR)/obj)
-BIN_DIR := $(abspath $(CURDIR)/bin)
 
-TARGETS := trace_io_analysis trace_io_record trace_io_replay
+# Compiler
+CC := gcc
+CXX := g++
 
-.PHONY: all $(TARGETS) clean
+# Directories
+ROOT_DIR := $(abspath $(CURDIR))
+OBJ_DIR := $(ROOT_DIR)/obj
+BIN_DIR := $(ROOT_DIR)/obj
+TEST_DIR := $(ROOT_DIR)/test
+
+TARGETS := trace_io_analysis trace_io_record trace_io_replay trace_app
+TEST_TARGETS := 
+
+.PHONY: all $(TARGETS) test $(TEST_TARGETS) clean
 
 all: $(TARGETS)
 
