@@ -28,21 +28,28 @@ uint64_t g_zone_sz_blk = 0;
 uint32_t g_max_open_zone = 0;
 uint32_t g_max_active_zone = 0;
 uint32_t g_max_append_blk = 0;
+/* io request */
 uint64_t g_num_io = 0;
+uint64_t g_num_io_zone = 0;
 
 static void
 usage(void)
 {
+    printf(" -c <.json> JSON file of the bdev device\n");
     printf(" -b <bdev> name of the bdev to use\n");
+    printf(" -z <number> name of zones to send io request\n");
 }
 
 static char *g_bdev_name = "Malloc0"; /* Default bdev name if without -b */
 static int
-parse_arg(int ch, char *arg)
+parse_arg(int ch, char *optarg)
 {
     switch (ch) {
     case 'b':
-        g_bdev_name = arg;
+        g_bdev_name = optarg;
+        break;
+    case 'z':
+        g_num_io_zone = atol(optarg);
         break;
     default:
         return -EINVAL;
@@ -214,7 +221,7 @@ read_zone(void *arg)
    
     uint64_t num_blocks = 1;
     uint64_t offset_blocks = 0;
-    for (uint32_t zone = 0; zone < 1; zone++) {
+    for (uint32_t zone = 0; zone < g_num_io_zone; zone++) {
         offset_blocks = zone * g_zone_sz_blk;
         for (; offset_blocks < zone * g_zone_sz_blk + g_zone_capacity; offset_blocks++) {        
             // Zero the buffer so that we can use it for reading 
@@ -270,12 +277,7 @@ append_zone_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
         appstop_error(req_context);
         return;
     }
-/*
-    if (az_complete % g_zone_capacity == 0) {
-        g_tick = spdk_get_ticks();
-        printf("tick = %ld\n", g_tick);
-    }   
-*/  
+
     if (az_complete == g_num_io) {
         printf("Append bdev complete...\n");
         read_zone(req_context);
@@ -294,13 +296,13 @@ append_zone(void *arg)
     if (g_max_active_zone == 0) {
         g_num_io = g_num_zone * g_zone_capacity;
     } else {
-        g_num_io = 1 * g_zone_capacity;//g_max_open_zone * g_zone_capacity;
+        g_num_io = g_num_io_zone * g_zone_capacity;
     }
 
     uint64_t zone_id = 0;
     uint64_t num_blocks = 1;
     uint64_t offset_blocks = 0;
-    for (uint32_t zone = 0; zone < 1; zone++) {
+    for (uint32_t zone = 0; zone < g_num_io_zone; zone++) {
         offset_blocks = zone * g_zone_sz_blk;
         for (; offset_blocks < zone * g_zone_sz_blk + g_zone_capacity; offset_blocks++) {
             zone_id =spdk_bdev_get_zone_id(req_context->bdev, offset_blocks);
@@ -460,7 +462,13 @@ appstart(void *arg)
     req_context->bdev_desc = NULL;
 
     SPDK_NOTICELOG("Successfully started the application\n");
-    sleep(20); // sleep 20 sec
+
+    /* sleep 20sec to open spdk_trace_record.
+     * spdk_trace_record is a spdk build-in trace tool 
+     * that can collect more trace than spdk_trace
+     */
+    sleep(20);
+
     /*  Get bdev descriptor to open the bdev by calling spdk_bdev_open_ext() with its name */
     SPDK_NOTICELOG("Opening the bdev %s\n", req_context->bdev_name);
     rc = spdk_bdev_open_ext(req_context->bdev_name, true, bdev_event_cb, NULL,
@@ -523,7 +531,7 @@ main(int argc, char **argv)
     opts.name = "seqwrite";
 
     /* Parse built-in SPDK command line parameters to enable spdk trace*/
-    if ((rc = spdk_app_parse_args(argc, argv, &opts, "b:", NULL, parse_arg,
+    if ((rc = spdk_app_parse_args(argc, argv, &opts, "b:z:", NULL, parse_arg,
                       usage)) != SPDK_APP_PARSE_ARGS_SUCCESS) {
         exit(rc);
     }

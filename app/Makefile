@@ -1,5 +1,5 @@
 SHELL_HACK := $(shell mkdir -p bin obj)
-
+export SPDK_ROOT_DIR=/home/znsvm/spdk
 # Directories
 APP_DIR := $(abspath $(CURDIR))
 APP_OBJ_DIR := $(APP_DIR)/obj

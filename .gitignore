@@ -6,3 +6,4 @@ app/obj/
 *.d
 *.o
 *.bin
+*.json

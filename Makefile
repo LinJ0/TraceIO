@@ -8,7 +8,7 @@ CXX := g++
 # Directories
 ROOT_DIR := $(abspath $(CURDIR))
 OBJ_DIR := $(ROOT_DIR)/obj
-BIN_DIR := $(ROOT_DIR)/obj
+BIN_DIR := $(ROOT_DIR)/bin
 APP_DIR := $(ROOT_DIR)/app
 
 TARGETS := trace_io_analysis trace_io_record trace_io_replay #trace_app

@@ -13,6 +13,8 @@ extern "C" {
 #include "spdk/util.h"
 }
 
+#define FILE_ENTRY 60000 /* number of sizeof(struct bin_file_data) */
+
 static struct spdk_trace_parser *g_parser;
 static const struct spdk_trace_flags *g_flags;
 static char *g_exe_name;
@@ -65,6 +67,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
         buffer.obj_start = entry->object_start - g_tsc_base;
     }
 
+    //snprintf(buffer.tpoint_name, sizeof(buffer.tpoint_name), d->name);
     strcpy(buffer.tpoint_name, d->name);
     
     if (strcmp(buffer.tpoint_name, "NVME_IO_SUBMIT") == 0) {
@@ -84,7 +87,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
             } else if (strcmp(d->args[i].name, "cdw13") == 0) { 
                 buffer.cdw13 = (uint32_t)entry->args[i].integer;
             } else {
-                continue;
+                buffer.cpl = 0;
             }
         }
     } else if (strcmp(buffer.tpoint_name, "NVME_IO_COMPLETE") == 0) {
@@ -94,11 +97,18 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
             } else if (strcmp(d->args[i].name, "cpl") == 0) {
                 buffer.cpl = entry->args[i].integer;
             } else {
-                continue;
+                buffer.opc = 0;
+                buffer.nsid = 0;
+                buffer.cdw10 = 0;
+                buffer.cdw11 = 0;
+                buffer.cdw12 = 0;
+                buffer.cdw13 = 0;
             }
         }
+    } else {
+        fprintf(stderr, "parse trace fail\n");
+        exit(1);
     }
-    
     fwrite(&buffer, sizeof(struct bin_file_data), 1, fptr);
 }
 
@@ -124,8 +134,7 @@ main(int argc, char **argv)
 {
     int op;
     const char *app_name = NULL;
-    const char *file_name = NULL;
-    char output_file_name[68];
+    const char *input_file_name = NULL;
     char shm_name[64];
     int shm_id = -1, shm_pid = -1;
     int lcore = SPDK_TRACE_MAX_LCORE;
@@ -152,7 +161,7 @@ main(int argc, char **argv)
             app_name = optarg;
             break;
         case 'f':
-            file_name = optarg;
+            input_file_name = optarg;
             break;
         case 'd':
             g_debug_enable = true;
@@ -163,39 +172,42 @@ main(int argc, char **argv)
         }
     }
 
-    if (file_name != NULL && app_name != NULL) {
+    if (input_file_name != NULL && app_name != NULL) {
         fprintf(stderr, "-f and -s are mutually exclusive\n");
         usage();
         exit(1);
     }
 
-    if (file_name == NULL && app_name == NULL) {
+    if (input_file_name == NULL && app_name == NULL) {
         fprintf(stderr, "One of -f and -s must be specified\n");
         usage();
         exit(1);
     }
 
     /* 
-     * output file name in ./ 
-     */                                                                                                                                                                           
-    if (!file_name) {
-        if (shm_id >= 0)
-            snprintf(output_file_name, sizeof(output_file_name), "%s_%d.bin", app_name, shm_id);
-        else
-            snprintf(output_file_name, sizeof(output_file_name), "%s_pid%d.bin", app_name, shm_pid);
-    } else
-        snprintf(output_file_name, sizeof(output_file_name), "%s.bin", file_name);
-    /* 
-     * file name in /dev/shm/ 
+     * input file in /dev/shm/ 
      */
-    if (!file_name) {
+    if (!input_file_name) {
         if (shm_id >= 0) {
             snprintf(shm_name, sizeof(shm_name), "/%s_trace.%d", app_name, shm_id);
         } else {
             snprintf(shm_name, sizeof(shm_name), "/%s_trace.pid%d", app_name, shm_pid);
         }
-        file_name = shm_name;
+        input_file_name = shm_name;
     }
+
+    /*  
+     * output file in current path
+     */   
+    char output_file_name[68] = {0}; 
+    if (!input_file_name) {
+        if (shm_id >= 0)
+            snprintf(output_file_name, sizeof(output_file_name), "/%s_%d.bin", app_name, shm_id);
+        else
+            snprintf(output_file_name, sizeof(output_file_name), "/%s_pid%d.bin", app_name, shm_pid);
+    } else {
+        snprintf(output_file_name, sizeof(output_file_name), "%s.bin", input_file_name);
+    }   
     
     FILE *fptr;
     if (output_file_name) {
@@ -208,7 +220,7 @@ main(int argc, char **argv)
     }   
 
     struct spdk_trace_parser_opts opts;
-    opts.filename = file_name;
+    opts.filename = input_file_name;
     opts.lcore = lcore;
     opts.mode = app_name == NULL ? SPDK_TRACE_PARSER_MODE_FILE : SPDK_TRACE_PARSER_MODE_SHM;
     g_parser = spdk_trace_parser_init(&opts);
@@ -235,19 +247,21 @@ main(int argc, char **argv)
     struct spdk_trace_parser_entry entry;
     while (spdk_trace_parser_next_entry(g_parser, &entry)) {
         d = &g_flags->tpoint[entry.entry->tpoint_id];
-    
         if (strcmp(d->name, "NVME_IO_SUBMIT") != 0 && strcmp(d->name, "NVME_IO_COMPLETE") != 0) {
             continue;
-        } else if (entry.args[0].integer) { 
+        } else if (entry.args[0].integer != 0) { 
             continue;   
         } else if (entry.object_start & (uint64_t)1 << 63) {
             continue;
         }
 
         /* g_tsc_base = tsc of first io cmd entry */
-        if (!g_tsc_base) {
+        if (g_tsc_base == 0) {
             g_tsc_base = entry.entry->tsc;
-        }
+        }   
+        if (entry.entry->tsc < g_tsc_base) {
+            continue;
+        }   
 
         /* process output file */
         process_output_file(&entry, fptr);
@@ -261,36 +275,32 @@ main(int argc, char **argv)
             fprintf(stderr, "Failed to open output file %s\n", output_file_name);
             return -1; 
         }
-        fseek(fptr, 0, SEEK_END);
-        int file_size = ftell(fptr);
-        rewind(fptr);
-        int entry_cnt = file_size / sizeof(struct bin_file_data);
+        struct bin_file_data buffer[FILE_ENTRY];
 
-        struct bin_file_data buffer[entry_cnt];    
-        
-        size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
-        if (read_val != (size_t)entry_cnt)
-            fprintf(stderr, "Fail to read input file\n");
-        fclose(fptr);
+        while (!feof(fptr)) {
+            size_t read_byte = fread(&buffer, sizeof(struct bin_file_data), FILE_ENTRY, fptr);
+            size_t read_entry = read_byte / sizeof(struct bin_file_data);
 
-        for (int i = 0; i < entry_cnt; i++) {
-            printf("tsc_timestamp: %20ld  ", buffer[i].tsc_timestamp);
-            printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
-            //printf("lcore: %d  ", buffer[i].lcore);
-            //printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
-            //printf("cid: %3d  ", buffer[i].cid);
-            //printf("obj_id: %ld  ", buffer[i].obj_id);
-            printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
-            printf("obj_start_time: %15ld  ", buffer[i].obj_start);
-            //printf("nsid: %d  ", buffer[i].nsid);
-            //printf("cpl: %d  ", buffer[i].cpl);
-            printf("opc: 0x%2x  ", buffer[i].opc); 
-            printf("cdw10: 0x%x  ", buffer[i].cdw10);
-            printf("cdw11: 0x%x  ", buffer[i].cdw11);
-            printf("cdw12: 0x%x  ", buffer[i].cdw12);
-            printf("cdw13: 0x%x  ", buffer[i].cdw13);
-            printf("\n");
+            for (size_t i = 0; i < read_entry; i++) {
+                printf("tsc_timestamp: %20ld  ", buffer[i].tsc_timestamp);
+                printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
+                //printf("lcore: %d  ", buffer[i].lcore);
+                //printf("tsc_rate: %ld  ", buffer[i].tsc_rate);
+                //printf("cid: %3d  ", buffer[i].cid);
+                //printf("obj_id: %ld  ", buffer[i].obj_id);
+                printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
+                printf("obj_start_time: %15ld  ", buffer[i].obj_start);
+                //printf("nsid: %d  ", buffer[i].nsid);
+                //printf("cpl: %d  ", buffer[i].cpl);
+                printf("opc: 0x%2x  ", buffer[i].opc); 
+                printf("cdw10: 0x%x  ", buffer[i].cdw10);
+                printf("cdw11: 0x%x  ", buffer[i].cdw11);
+                printf("cdw12: 0x%x  ", buffer[i].cdw12);
+                printf("cdw13: 0x%x  ", buffer[i].cdw13);
+                printf("\n");
+            }
         }
+        fclose(fptr);
     }
 
     spdk_trace_parser_cleanup(g_parser);
