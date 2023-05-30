@@ -813,6 +813,7 @@ main(int argc, char **argv)
     printf("%-15s  ", "Latency (tsc)");
     printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20ld\n",
             g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
+    printf("\n");
     */
     printf("%-15s  ", "Latency (us)");
     printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
@@ -876,8 +877,8 @@ main(int argc, char **argv)
             rc = process_num_rw(&buffer[i], r_blk, w_blk);
             if (rc != 0) {
                 fprintf(stderr, "Analysis error\n");
-                free(r_iosize);
-                free(w_iosize);
+                free(r_blk);
+                free(w_blk);
                 fclose(fptr);
                 return rc; 
             }

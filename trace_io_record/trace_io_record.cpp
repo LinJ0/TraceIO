@@ -293,6 +293,8 @@ main(int argc, char **argv)
             //printf("read_entry = %ld\n", read_entry);
             if (buffer_entry != read_entry) {
                 fprintf(stderr, "Fail to read input file\n");
+                fclose(fptr);
+                return -1;
             }
             
             for (size_t i = 0; i < read_entry; i++) {
@@ -319,6 +321,6 @@ main(int argc, char **argv)
 
     spdk_trace_parser_cleanup(g_parser);
 
-    return (0);
+    return 0;
 }
 
