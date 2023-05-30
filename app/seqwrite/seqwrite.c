@@ -220,7 +220,8 @@ read_zone(void *arg)
     printf("Reading the bdev...\n");
    
     uint64_t num_blocks = 1;
-    uint64_t offset_blocks = 0;
+/*    uint64_t offset_blocks = 0;
+
     for (uint32_t zone = 0; zone < g_num_io_zone; zone++) {
         offset_blocks = zone * g_zone_sz_blk;
         for (; offset_blocks < zone * g_zone_sz_blk + g_zone_capacity; offset_blocks++) {        
@@ -238,9 +239,8 @@ read_zone(void *arg)
             }   
         }
     }  
+*/
 
-/*
-    uint64_t num_blocks = 1;
     for (uint64_t i = 0, offset_blocks = 0; i < g_num_io; i++, offset_blocks++) {
         // Zero the buffer so that we can use it for reading 
         memset(req_context->buff, 0, req_context->buff_size);
@@ -256,7 +256,7 @@ read_zone(void *arg)
             appstop_error(req_context);
         }
     }
-  */ 
+   
 }
 /* read zone end */
 
@@ -301,7 +301,8 @@ append_zone(void *arg)
 
     uint64_t zone_id = 0;
     uint64_t num_blocks = 1;
-    uint64_t offset_blocks = 0;
+/*    uint64_t offset_blocks = 0;
+
     for (uint32_t zone = 0; zone < g_num_io_zone; zone++) {
         offset_blocks = zone * g_zone_sz_blk;
         for (; offset_blocks < zone * g_zone_sz_blk + g_zone_capacity; offset_blocks++) {
@@ -318,13 +319,14 @@ append_zone(void *arg)
             }   
         }
     }  
-/*
+*/
+
     for (uint64_t i = 0, offset_blocks = 0; i < g_num_io; i++, offset_blocks++) {
         zone_id =spdk_bdev_get_zone_id(req_context->bdev, offset_blocks);
         //printf("offset_blocks = 0x%lx, zone_id=0x%lx\n", offset_blocks, zone_id);
         rc = spdk_bdev_zone_append(req_context->bdev_desc, req_context->bdev_io_channel,
                                 req_context->buff, zone_id, num_blocks, 
-                                append_complete, req_context);
+                                append_zone_complete, req_context);
         if (rc == -ENOMEM) {
             SPDK_NOTICELOG("Queueing io\n");
             queue_io_wait_with_cb(req_context, append_zone);
@@ -333,7 +335,7 @@ append_zone(void *arg)
             appstop_error(req_context);
         }   
     }
-*/   
+   
 }
 /* append zone end */
 

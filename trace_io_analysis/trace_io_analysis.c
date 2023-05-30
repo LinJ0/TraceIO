@@ -9,6 +9,8 @@
 #include "spdk/nvme_spec.h"
 #include "../include/trace_io.h"
 
+#define ENTRY_MAX 10000 /* number of sizeof(struct bin_file_data) */
+
 struct ctrlr_entry {
     struct spdk_nvme_ctrlr *ctrlr;
     TAILQ_ENTRY(ctrlr_entry) link;
@@ -682,27 +684,6 @@ main(int argc, char **argv)
         exit(1);
     }
 
-    /* Read input file */
-    FILE *fptr = fopen(input_file_name, "rb");
-    if (fptr == NULL) {
-        fprintf(stderr, "Failed to open input file %s\n", input_file_name);
-        return 1;  
-    }   
-
-    fseek(fptr, 0, SEEK_END);
-    int file_size = ftell(fptr);
-    rewind(fptr);
-    int entry_cnt = file_size / sizeof(struct bin_file_data);
-
-    struct bin_file_data buffer[entry_cnt]; 
- 
-    size_t read_val = fread(&buffer, sizeof(struct bin_file_data), entry_cnt, fptr);
-    if (read_val != (size_t)entry_cnt) {
-        fprintf(stderr, "Fail to read input file\n");
-        return 1;
-    }   
-    fclose(fptr);
-
     /* Initialize env */
     struct spdk_env_opts env_opts;
     spdk_env_opts_init(&env_opts);
@@ -710,17 +691,45 @@ main(int argc, char **argv)
     rc = spdk_env_init(&env_opts);
     if (rc < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");
-        return rc;
-    }
+        return rc; 
+    }   
 
-    /* print trace */
+    /* Read input file */
+    FILE *fptr = NULL;
+    fptr = fopen(input_file_name, "rb");
+    if (fptr == NULL) {
+            fprintf(stderr, "Failed to open input file %s\n", input_file_name);
+            return -1; 
+    }
+    fseek(fptr, 0, SEEK_END);
+    size_t file_size = ftell(fptr);
+    rewind(fptr);
+    size_t total_entry = file_size / sizeof(struct bin_file_data); /* Get number of requests */
+    //printf("Total number of request = %ld\n", total_entry >> 1);
+
+    /* Print trace */
     if (g_print_trace) {
         print_uline('=', printf("\nPrint I/O Trace\n"));
-        for (int i = 0; i < entry_cnt; i++) {
-            rc = process_print_trace(&buffer[i]);
-            if (rc != 0) {
-                fprintf(stderr, "Parse error\n");
-                return rc;
+
+        size_t remain_entry = total_entry;
+        
+        while (!feof(fptr) && remain_entry) {
+
+            size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
+            remain_entry -= buffer_entry;
+            struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
+            size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+            if (buffer_entry != read_entry) {
+                fprintf(stderr, "Fail to read input file\n");
+            }
+
+            for (size_t i = 0; i < read_entry; i++) {
+                rc = process_print_trace(&buffer[i]);
+                if (rc != 0) {
+                    fprintf(stderr, "Parse error\n");
+                    fclose(fptr);
+                    return rc;
+                 }
             }
         }
     }
@@ -753,7 +762,7 @@ main(int argc, char **argv)
     printf("Namespace max transfer block: %lu\n", g_max_transfer_block);
 
     /*
-     * Trace analysis: 
+     * Trace analysis round 1: 
      * 1. Latency in tsc (time stamp counter) and in us
      * 2. Total number of read write
      * 3. IO size
@@ -775,30 +784,45 @@ main(int argc, char **argv)
     memset(r_iosize, 0, g_max_transfer_block * sizeof(uint32_t));
     memset(w_iosize, 0, g_max_transfer_block * sizeof(uint32_t));
     
-    for (int i = 0; i < entry_cnt; i++) {
-        rc = process_latency_iosize(&buffer[i], r_iosize, w_iosize);
-        if (rc != 0) {
-            fprintf(stderr, "Parse error\n");
-            free(r_iosize);
-            free(w_iosize);
-            return rc;
+    rewind(fptr);
+    size_t remain_entry = total_entry;
+    while (!feof(fptr) && remain_entry) {
+        size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
+        remain_entry -= buffer_entry;
+        struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
+        size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+        if (buffer_entry != read_entry) {
+                fprintf(stderr, "Fail to read input file\n");
+        }
+
+        for (size_t i = 0; i < read_entry; i++) {
+            rc = process_latency_iosize(&buffer[i], r_iosize, w_iosize);
+            if (rc != 0) {
+                fprintf(stderr, "Analysis error\n");
+                free(r_iosize);
+                free(w_iosize);
+                fclose(fptr);
+                return rc;
+            }
         }
     }
 
     print_uline('=', printf("\nTrace Analysis\n"));
-    latency_avg(entry_cnt >> 1);
+    latency_avg(total_entry >> 1);
+    /*
     printf("%-15s  ", "Latency (tsc)");
     printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20ld\n",
             g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
-
+    */
     printf("%-15s  ", "Latency (us)");
     printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
             g_latency_us_min, g_latency_us_max, g_latency_us_avg);
-
+    printf("\n");
+    printf("%-15s  ", "Number of R/W");
     printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n",
             g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt));
-    
-    print_uline('=', printf("\nI/O size\n"));
+    printf("\n");    
+    printf("R/W Request size\n");
     for (uint64_t i = 0; i < g_max_transfer_block; i++) {
         if (!r_iosize[i] && !w_iosize[i])
             continue;
@@ -812,7 +836,7 @@ main(int argc, char **argv)
     free(w_iosize);
 
     /*
-     * Trace analysis: 
+     * Trace analysis round 2: 
      * 4. The number of R/W in a block
      * 5. The number of R/W in a zone (if the block device is ZNS SSD)
      */
@@ -837,16 +861,32 @@ main(int argc, char **argv)
     memset(r_zone, 0, g_total_zones * sizeof(uint16_t));
     memset(w_zone, 0, g_total_zones * sizeof(uint16_t));
 
-    for (int i = 0; i < entry_cnt; i++) {
-        rc = process_num_rw(&buffer[i], r_blk, w_blk);
-        if (rc != 0) {
-            fprintf(stderr, "Parse error\n");
-            free(r_blk);
-            free(w_blk);
+    rewind(fptr);
+    remain_entry = total_entry;
+    while (!feof(fptr) && remain_entry) {
+        size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
+        remain_entry -= buffer_entry;
+        struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
+        size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+        if (buffer_entry != read_entry) {
+                fprintf(stderr, "Fail to read input file\n");
+        }
+
+        for (size_t i = 0; i < read_entry; i++) {
+            rc = process_num_rw(&buffer[i], r_blk, w_blk);
+            if (rc != 0) {
+                fprintf(stderr, "Analysis error\n");
+                free(r_iosize);
+                free(w_iosize);
+                fclose(fptr);
+                return rc; 
+            }
         }
     }
 
-    print_uline('=', printf("\nNumber of R/W in a block\n"));    
+    fclose(fptr);
+
+    printf("\nNumber of R/W in a block\n");    
     for (uint64_t i = 0, cnt = 0, zidx = 0; i < g_ns_block; i++) {
         if (!r_blk[i] && !w_blk[i])
             continue;
@@ -868,7 +908,7 @@ main(int argc, char **argv)
     printf("\n");
 
     if (g_zone) {
-        print_uline('=', printf("\nNumber of R/W in a zone\n"));
+        printf("\nNumber of R/W in a zone\n");
         for (uint64_t i = 0, cnt = 0; i < g_total_zones; i++) {
             if (!r_zone[i] && !w_zone[i])
                 continue;

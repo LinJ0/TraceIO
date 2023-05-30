@@ -13,7 +13,7 @@ extern "C" {
 #include "spdk/util.h"
 }
 
-#define FILE_ENTRY 60000 /* number of sizeof(struct bin_file_data) */
+#define ENTRY_MAX 10000 /* number of sizeof(struct bin_file_data) */
 
 static struct spdk_trace_parser *g_parser;
 static const struct spdk_trace_flags *g_flags;
@@ -263,7 +263,7 @@ main(int argc, char **argv)
             continue;
         }   
 
-        /* process output file */
+        /* write trace to output file */
         process_output_file(&entry, fptr);
     }
     fclose(fptr);
@@ -275,12 +275,26 @@ main(int argc, char **argv)
             fprintf(stderr, "Failed to open output file %s\n", output_file_name);
             return -1; 
         }
-        struct bin_file_data buffer[FILE_ENTRY];
 
-        while (!feof(fptr)) {
-            size_t read_byte = fread(&buffer, sizeof(struct bin_file_data), FILE_ENTRY, fptr);
-            size_t read_entry = read_byte / sizeof(struct bin_file_data);
+        fseek(fptr, 0, SEEK_END);
+        size_t file_size = ftell(fptr);
+        rewind(fptr);
+        size_t total_entry = file_size / sizeof(struct bin_file_data);
+        size_t remain_entry = total_entry;
+        printf("total_entry = %ld\n", total_entry);
 
+        while (!feof(fptr) && remain_entry) {
+            //printf("remain_entry = %ld\n", remain_entry);
+            size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
+            remain_entry -= buffer_entry;
+            struct bin_file_data buffer[buffer_entry];
+
+            size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+            //printf("read_entry = %ld\n", read_entry);
+            if (buffer_entry != read_entry) {
+                fprintf(stderr, "Fail to read input file\n");
+            }
+            
             for (size_t i = 0; i < read_entry; i++) {
                 printf("tsc_timestamp: %20ld  ", buffer[i].tsc_timestamp);
                 printf("tpoint_name: %-16s  ", buffer[i].tpoint_name);
