@@ -1,4 +1,4 @@
-#include "../include/spdk_trace.h"
+#include "trace_io.h"
 
 int
 enable_spdk_trace(const char *app_name, const char *tpoint_group_name)

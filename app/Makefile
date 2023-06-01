@@ -5,7 +5,7 @@ APP_DIR := $(abspath $(CURDIR))
 APP_OBJ_DIR := $(APP_DIR)/obj
 APP_BIN_DIR := $(APP_DIR)/bin
 
-APP_TARGETS := seqwrite
+APP_TARGETS := seqwrite_bdev seqwrite_nvme
 
 .PHONY: all $(APP_TARGETS) clean
 

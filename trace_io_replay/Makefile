@@ -3,16 +3,18 @@
 #  All rights reserved.
 #
 
-#SPDK_ROOT_DIR := $(CURDIR)/../../spdk
-TRACE_IO_ROOT_DIR := $(abspath $(CURDIR)/..)
-TRACE_IO_LIB_DIR := $(TRACE_IO_ROOT_DIR)/lib/
-TRACE_IO_LIBS := $(wildcard $(TRACE_IO_LIB_DIR)*.c)
+SPDK_ROOT_DIR := $(CURDIR)/../../spdk
+ROOT_DIR := $(abspath $(CURDIR)/..)
 
-SPDK_LIB_LIST =  $(ALL_MODULES_LIST) event event_bdev
+include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-LIBS += $(TRACE_IO_LIBS)
-CFLAGS += -I$(TRACE_IO_ROOT_DIR)/include
+CFLAGS += -O3 -I$(ROOT_DIR)/include
+C_SRCS := $(wildcard $(ROOT_DIR)/lib/*.c) $(wildcard ./*.c)
+LIB += -L $(ROOT_DIR)/lib
 
-APP = trace_io_replay
+SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 
-include $(SPDK_ROOT_DIR)/mk/nvme.libtest.mk
+APP := trace_io_replay
+
+include $(SPDK_ROOT_DIR)/mk/spdk.app.mk

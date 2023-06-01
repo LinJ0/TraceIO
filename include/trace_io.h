@@ -1,3 +1,7 @@
+#include <spdk/trace.h>
+#include <spdk/string.h>
+#include <spdk/util.h>
+
 #ifndef TRACE_IO_H
 #define TRACE_IO_H
 
@@ -22,6 +26,17 @@ struct bin_file_data {
     uint32_t cdw12;
     uint32_t cdw13;
 };
+
+/**
+ * For enable spdk trace tool.
+ *
+ * \param app_name that must equal to env_opts.name or app_opts.name.
+ * \param tpoint_group_name to specific one of more tracepoints
+ *        e.g. "nvme_pcie,bdev" to enable tracpoint nvme_pcie and bdev (string without any space)
+ * \return 0 on success, else non-zero indicates a failure.
+ */
+
+int enable_spdk_trace(const char *app_name, const char *tpoint_group_name);
 
 /* in spdk/nvme_spec.h
 

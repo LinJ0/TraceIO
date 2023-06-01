@@ -11,9 +11,9 @@ OBJ_DIR := $(ROOT_DIR)/obj
 BIN_DIR := $(ROOT_DIR)/bin
 APP_DIR := $(ROOT_DIR)/app
 
-TARGETS := trace_io_analysis trace_io_record trace_io_replay #trace_app
+TARGETS := trace_io_analysis trace_io_record trace_io_replay
 
-.PHONY: all $(TARGETS) app clean
+.PHONY: all $(TARGETS) app appclean clean
 
 all: $(TARGETS)
 
@@ -25,5 +25,9 @@ $(TARGETS):
 app:
 	$(MAKE) -C $(APP_DIR)
 
+appclean:
+	@ rm -rf $(APP_DIR)/obj $(APP_DIR)/bin
+
 clean:
 	@ rm -rf $(OBJ_DIR) $(BIN_DIR)
+

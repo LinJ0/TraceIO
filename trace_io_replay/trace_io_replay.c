@@ -8,9 +8,7 @@
 #include "spdk/vmd.h"
 #include "spdk/nvme_zns.h"
 #include "spdk/nvme_spec.h"
-#include "spdk/log.h"
 #include "trace_io.h"
-#include "spdk_trace.h"
 
 #define ENTRY_MAX 10000 /* number of sizeof(struct bin_file_data) */
 
