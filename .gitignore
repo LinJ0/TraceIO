@@ -7,3 +7,5 @@ app/obj/
 *.o
 *.bin
 *.json
+*.bin
+*.trace

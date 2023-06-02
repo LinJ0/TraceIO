@@ -189,9 +189,9 @@ main(int argc, char **argv)
      */
     if (!input_file_name) {
         if (shm_id >= 0) {
-            snprintf(shm_name, sizeof(shm_name), "/%s_trace.%d", app_name, shm_id);
+            snprintf(shm_name, sizeof(shm_name), "%s_trace.%d", app_name, shm_id);
         } else {
-            snprintf(shm_name, sizeof(shm_name), "/%s_trace.pid%d", app_name, shm_pid);
+            snprintf(shm_name, sizeof(shm_name), "%s_trace.pid%d", app_name, shm_pid);
         }
         input_file_name = shm_name;
     }
@@ -201,10 +201,11 @@ main(int argc, char **argv)
      */   
     char output_file_name[68] = {0}; 
     if (!input_file_name) {
-        if (shm_id >= 0)
-            snprintf(output_file_name, sizeof(output_file_name), "/%s_%d.bin", app_name, shm_id);
-        else
-            snprintf(output_file_name, sizeof(output_file_name), "/%s_pid%d.bin", app_name, shm_pid);
+        if (shm_id >= 0) {
+            snprintf(output_file_name, sizeof(output_file_name), "%s_%d.bin", app_name, shm_id);
+        } else {
+            snprintf(output_file_name, sizeof(output_file_name), "%s_pid%d.bin", app_name, shm_pid);
+        }
     } else {
         snprintf(output_file_name, sizeof(output_file_name), "%s.bin", input_file_name);
     }   
