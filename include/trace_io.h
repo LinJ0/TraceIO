@@ -30,13 +30,31 @@ struct bin_file_data {
 /**
  * For enable spdk trace tool.
  *
- * \param app_name that must equal to env_opts.name or app_opts.name.
- * \param tpoint_group_name to specific one of more tracepoints
- *        e.g. "nvme_pcie,bdev" to enable tracpoint nvme_pcie and bdev (string without any space)
+ * \param app name that must equal to env_opts.name or app_opts.name.
+ * \param tpoint_group_name to specific one of more tracepoints.
+ *        e.g. "nvme_pcie,bdev" to enable tracpoint nvme_pcie and bdev (string without any space.)
  * \return 0 on success, else non-zero indicates a failure.
  */
-
 int enable_spdk_trace(const char *app_name, const char *tpoint_group_name);
+
+/**
+ * For enable spdk_trace_record to collect longer trace, and terminate it by disable_spdk_trace_record().
+ * It must be used after enable spdk trace tool and output trace file in current directory.
+ *
+ * \param app name that must equal to env_opts.name or app_opts.name.
+ * \param app pid.
+ * \return spdk_trace_record pid, else 0 indicates a spdk_trace_record fork() failure.
+ */
+pid_t enable_spdk_trace_record(const char *app_name, pid_t app_pid);
+
+/**
+ * For disable spdk_trace_record.
+ * It is used after enable_spdk_trace() and before app finish.
+ *
+ * \param spdk_trace_record pid that name that enable_spdk_trace_record() returned.
+ * \return 0 on success, else non-zero indicates a failure.
+ */
+int disable_spdk_trace_record(pid_t spdk_pid);
 
 /* in spdk/nvme_spec.h
 

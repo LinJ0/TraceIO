@@ -98,3 +98,57 @@ enable_spdk_trace(const char *app_name, const char *tpoint_group_name)
     return 0;
 }
 
+static void 
+sigint_handler(pid_t spdk_pid) 
+{
+    printf("spdk_trace_record receive SIGINT\n");
+
+    if (spdk_pid > 0) {
+        // send SIGINT to child_p2
+        if (kill(spdk_pid, SIGINT) == 0) {
+            printf("send SIGINT to spdk_trace_record\n");
+        } else {
+            fprintf(stderr, "Fail to send SIGINT to spdk_trace_record\n");
+        }
+    }
+}
+
+pid_t
+enable_spdk_trace_record(const char *app_name, pid_t app_pid)
+{
+    /* register SIGINT signal handler function */
+    signal(SIGINT, sigint_handler);
+
+    char app_pid_str[32];
+    snprintf(app_pid_str, sizeof(app_pid_str), "%d", app_pid);
+    char spdk_trace_file[64];
+    snprintf(spdk_trace_file, sizeof(spdk_trace_file), "%s_pid%d.trace", app_name, app_pid);
+
+    pid_t spdk_pid = fork();
+    if (spdk_pid < 0) {
+        fprintf(stderr, "spdk_trace_record fork() fail\n");
+        return 1;
+    } else if (spdk_pid == 0) {
+        printf("spdk_trace_record PID：%d\n", getpid());
+        /* execute spdk_trace_record */
+        char *args[] = {"/home/znsvm/spdk/build/bin/spdk_trace_record", "-q", 
+                        "-s", (char *)app_name, "-p", app_pid_str, 
+                        "-f", spdk_trace_file, NULL};
+        execvp(args[0], args);
+        
+        /* if success to execute spdk_trace_record, never go to here */
+        fprintf(stderr, "spdk_trace_record execvp() fail\n");
+        return 0;
+    }
+    return spdk_pid;
+}
+
+int
+disable_spdk_trace_record(pid_t spdk_pid)
+{
+    if (spdk_pid == 0) {
+        return -1;
+    }
+    sigint_handler(spdk_pid);
+    return 0;
+}

@@ -460,6 +460,14 @@ main(int argc, char **argv)
         }
     }
 
+    pid_t spdk_pid = 0;
+    if (g_spdk_trace) {
+        spdk_pid = enable_spdk_trace_record(env_opts.name, getpid());
+        if (spdk_pid == 0) {
+            fprintf(stderr, "Fail to exec spdk_trace_record\n");
+        }
+    }
+
     /* Get trid */
     spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
     snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
@@ -483,7 +491,7 @@ main(int argc, char **argv)
     struct ns_entry *ns_entry = alloc_qpair();
     if (!ns_entry) {
         fprintf(stderr, "Failed to alloc_qpair()\n");
-        return -1;
+        goto exit;
     }
 
     /* Get namespace & zns information */
@@ -503,6 +511,9 @@ main(int argc, char **argv)
     free_qpair(ns_entry->qpair);
 
     exit:
+    if (g_spdk_trace && spdk_pid != 0) {
+        disable_spdk_trace_record(spdk_pid);
+    }
     cleanup();
     spdk_env_fini();
 }

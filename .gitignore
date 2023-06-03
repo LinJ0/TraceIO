@@ -9,3 +9,4 @@ app/obj/
 *.json
 *.bin
 *.trace
+*-0
