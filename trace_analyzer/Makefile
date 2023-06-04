@@ -5,6 +5,6 @@
 
 #SPDK_ROOT_DIR := $(CURDIR)/../../spdk
 
-APP = trace_io_analysis
+APP = trace_analyzer
 
 include $(SPDK_ROOT_DIR)/mk/nvme.libtest.mk

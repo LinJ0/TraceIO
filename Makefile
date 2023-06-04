@@ -11,7 +11,7 @@ OBJ_DIR := $(ROOT_DIR)/obj
 BIN_DIR := $(ROOT_DIR)/bin
 APP_DIR := $(ROOT_DIR)/app
 
-TARGETS := trace_io_analysis trace_io_record trace_io_replay
+TARGETS := trace_catcher trace_analyzer trace_replayer
 
 .PHONY: all $(TARGETS) app appclean clean
 
@@ -29,5 +29,5 @@ appclean:
 	@ rm -rf $(APP_DIR)/obj $(APP_DIR)/bin
 
 clean:
-	@ rm -rf $(OBJ_DIR) $(BIN_DIR)
+	@ rm -rf $(OBJ_DIR) $(BIN_DIR) $(wildcard $(TARGETS)/$(TARGETS).d)
 

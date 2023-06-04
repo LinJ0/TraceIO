@@ -687,7 +687,7 @@ main(int argc, char **argv)
     /* Initialize env */
     struct spdk_env_opts env_opts;
     spdk_env_opts_init(&env_opts);
-    env_opts.name = "trace_io_analysis";
+    env_opts.name = "trace_analyzer";
     rc = spdk_env_init(&env_opts);
     if (rc < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");

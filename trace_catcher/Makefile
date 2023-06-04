@@ -8,11 +8,11 @@
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-APP = trace_io_record
+APP = trace_catcher
 SPDK_NO_LINK_ENV = 1
 
 SPDK_LIB_LIST += trace_parser
 
-CXX_SRCS := trace_io_record.cpp
+CXX_SRCS := trace_catcher.cpp
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app_cxx.mk

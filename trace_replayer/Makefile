@@ -3,7 +3,7 @@
 #  All rights reserved.
 #
 
-SPDK_ROOT_DIR := $(CURDIR)/../../spdk
+#SPDK_ROOT_DIR := $(CURDIR)/../../spdk
 ROOT_DIR := $(abspath $(CURDIR)/..)
 
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
@@ -15,6 +15,6 @@ LIB += -L $(ROOT_DIR)/lib
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 
-APP := trace_io_replay
+APP := trace_replayer
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
