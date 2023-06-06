@@ -146,10 +146,10 @@ cleanup(void)
 static uint64_t g_read_cnt = 0, g_write_cnt = 0;
 
 static float
-rw_ratio(uint64_t *read, uint64_t *write)
+rw_ratio(uint64_t read, uint64_t write)
 {
     float ratio = 0.0;
-    return ratio = (*read + *write) ? (*read * 100) / (*read + *write) : 0;
+    return ratio = (read + write) ? (read * 100) / (read + write) : 0;
 }
 
 static int
@@ -299,8 +299,21 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
     return rc;    
 }
 
+static uint64_t g_end_tsc = 0;
+static uint64_t g_req_num = 0;
+static float
+iops(uint64_t end_tsc, uint64_t req_num)
+{
+    float IOPS = 0.0;
+    if (req_num ==0 || end_tsc == 0) {
+        return IOPS;
+    }
+    float end_sec = get_us_from_tsc(end_tsc, g_tsc_rate) / 1000000;
+    return IOPS = (float)req_num / end_sec;
+}
+
 static int
-process_latency_iosize(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_iosize)
+process_analysis_round1(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_iosize)
 {
     if (!g_tsc_rate) { /* for calculate g_latency_us_avg */
         g_tsc_rate = d->tsc_rate;
@@ -309,7 +322,7 @@ process_latency_iosize(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_
     int rc;
     uint32_t nlb = d->cdw12 & UINT16BIT_MASK;
     if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0) {
-        rc = iosize_rw_counter(d->opc, nlb, r_iosize, w_iosize);
+        rc = iosize_rw_counter(d->opc, nlb, r_iosize, w_iosize);    /* for calculate request size */
         if (rc) {
             printf("Unknown Opcode\n");
             return rc;
@@ -317,15 +330,16 @@ process_latency_iosize(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_
     }
 
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        latency_min_max(d->tsc_sc_time, d->tsc_rate);
-        latency_total(d->tsc_sc_time);
+        g_end_tsc = d->tsc_sc_time;                                 /* for calculate IOPS */
+        latency_min_max(d->tsc_sc_time, d->tsc_rate);               /* for calculate latency (min & max) */
+        latency_total(d->tsc_sc_time);                              /* for calculate latency (avg) */
     }
 
     return rc;
 }
 
 static int
-process_num_rw(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
+process_analysis_round2(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
 {
     int rc;
     uint64_t slba = 0;    
@@ -334,7 +348,7 @@ process_num_rw(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
 
         if (d->opc != SPDK_NVME_OPC_ZONE_MGMT_RECV && d->opc != SPDK_NVME_OPC_COPY) {
             uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
-            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);
+            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);      /* for calculate r/w # in a block */
         }
     }
     if (rc) {
@@ -704,8 +718,9 @@ main(int argc, char **argv)
     fseek(fptr, 0, SEEK_END);
     size_t file_size = ftell(fptr);
     rewind(fptr);
-    size_t total_entry = file_size / sizeof(struct bin_file_data); /* Get number of requests */
-    //printf("Total number of request = %ld\n", total_entry >> 1);
+    size_t total_entry = file_size / sizeof(struct bin_file_data);
+    g_req_num = total_entry >> 1; /* Get number of requests */
+    //printf("Total number of request = %ld\n", g_req_num);
 
     /* Print trace */
     if (g_print_trace) {
@@ -758,14 +773,15 @@ main(int argc, char **argv)
     /* Get namespace data */
     get_ns_info();
     cleanup();
-    printf("Number of blocks per namespace = 0x%lx\n", g_ns_block);
-    printf("Namespace max transfer block: %lu\n", g_max_transfer_block);
+    //printf("Number of blocks per namespace = 0x%lx\n", g_ns_block);
+    //printf("Namespace max transfer block: %lu\n", g_max_transfer_block);
 
     /*
      * Trace analysis round 1: 
      * 1. Latency in tsc (time stamp counter) and in us
-     * 2. Total number of read write
-     * 3. IO size
+     * 2. IOPS
+     * 3. Total number of read write
+     * 4. IO request size
      */
     uint32_t *r_iosize = (uint32_t *)malloc(g_max_transfer_block * sizeof(uint32_t));
     if (!r_iosize) {
@@ -796,7 +812,7 @@ main(int argc, char **argv)
         }
 
         for (size_t i = 0; i < read_entry; i++) {
-            rc = process_latency_iosize(&buffer[i], r_iosize, w_iosize);
+            rc = process_analysis_round1(&buffer[i], r_iosize, w_iosize);
             if (rc != 0) {
                 fprintf(stderr, "Analysis error\n");
                 free(r_iosize);
@@ -807,23 +823,21 @@ main(int argc, char **argv)
         }
     }
 
+    /* Calculate average latency after process all entry */
+    latency_avg(g_req_num);
+
     print_uline('=', printf("\nTrace Analysis\n"));
-    latency_avg(total_entry >> 1);
-    /*
-    printf("%-15s  ", "Latency (tsc)");
-    printf("MIN:   %-20ld MAX:   %-20ld AVG: %-20ld\n",
-            g_latency_tsc_min, g_latency_tsc_max, g_latency_tsc_avg);
-    printf("\n");
-    */
-    printf("%-15s  ", "Latency (us)");
-    printf("MIN:   %-20.3f MAX:   %-20.3f AVG: %-20.3f\n", 
-            g_latency_us_min, g_latency_us_max, g_latency_us_avg);
-    printf("\n");
-    printf("%-15s  ", "Number of R/W");
-    printf("READ:  %-20jd WRITE: %-20jd R/W: %6.3f %%\n",
-            g_read_cnt, g_write_cnt, rw_ratio(&g_read_cnt, &g_write_cnt));
-    printf("\n");    
-    printf("R/W Request size\n");
+
+    printf("%-15s  ", "IOPS:");
+    printf("%-20.3f \n", iops(g_end_tsc, g_req_num));
+
+    printf("%-15s  ", "Latency (us):");
+    printf("MIN   %-20.3f MAX   %-20.3f AVG %-20.3f\n", g_latency_us_min, g_latency_us_max, g_latency_us_avg);
+    
+    printf("%-15s  ", "Number of R/W:");
+    printf("READ  %-20jd WRITE %-20jd R/W %6.3f %%\n", g_read_cnt, g_write_cnt, rw_ratio(g_read_cnt, g_write_cnt));
+
+    printf("\nR/W Request size: \n");
     for (uint64_t i = 0; i < g_max_transfer_block; i++) {
         if (!r_iosize[i] && !w_iosize[i])
             continue;
@@ -874,7 +888,7 @@ main(int argc, char **argv)
         }
 
         for (size_t i = 0; i < read_entry; i++) {
-            rc = process_num_rw(&buffer[i], r_blk, w_blk);
+            rc = process_analysis_round2(&buffer[i], r_blk, w_blk);
             if (rc != 0) {
                 fprintf(stderr, "Analysis error\n");
                 free(r_blk);
@@ -887,15 +901,15 @@ main(int argc, char **argv)
 
     fclose(fptr);
 
-    printf("\nNumber of R/W in a block\n");    
+    printf("\nNumber of R/W in a block:\n");    
     for (uint64_t i = 0, cnt = 0, zidx = 0; i < g_ns_block; i++) {
         if (!r_blk[i] && !w_blk[i])
             continue;
         cnt++;
-        printf("0x%016lx  ", i);
-        printf("r %-5d ", r_blk[i]);
-        printf("w %-5d ", w_blk[i]);
-        printf("r+w %-5d ", r_blk[i] + w_blk[i]);
+        printf("0x%013lx  ", i);
+        printf("r %-7d ", r_blk[i]);
+        printf("w %-7d ", w_blk[i]);
+        printf("r+w %-7d ", r_blk[i] + w_blk[i]);
 
         if (g_zone) {
         zidx = i / g_zone_size_lba;
@@ -909,15 +923,15 @@ main(int argc, char **argv)
     printf("\n");
 
     if (g_zone) {
-        printf("\nNumber of R/W in a zone\n");
+        printf("\nNumber of R/W in a zone:\n");
         for (uint64_t i = 0, cnt = 0; i < g_total_zones; i++) {
             if (!r_zone[i] && !w_zone[i])
                 continue;
             cnt++;
-            printf("zone %-13ld  ", i); 
-            printf("r %-5d ", r_zone[i]);
-            printf("w %-5d ", w_zone[i]);
-            printf("r+w %-5d ", r_zone[i] + w_zone[i]);
+            printf("zone %010ld  ", i); 
+            printf("r %-7d ", r_zone[i]);
+            printf("w %-7d ", w_zone[i]);
+            printf("r+w %-7d ", r_zone[i] + w_zone[i]);
             if (cnt % 4 == 0)
                 printf("\n");
         }

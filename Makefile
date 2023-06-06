@@ -29,5 +29,5 @@ appclean:
 	@ rm -rf $(APP_DIR)/obj $(APP_DIR)/bin
 
 clean:
-	@ rm -rf $(OBJ_DIR) $(BIN_DIR) $(wildcard $(TARGETS)/$(TARGETS).d)
+	@ rm -rf $(OBJ_DIR) $(BIN_DIR)
 
