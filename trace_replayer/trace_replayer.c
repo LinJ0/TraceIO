@@ -25,6 +25,13 @@ struct ns_entry {
 	struct spdk_nvme_qpair *qpair;
 };
 
+struct io_task {
+    struct spdk_nvme_qpair *qpair;
+    uint16_t opc;
+    uint64_t slba;
+    uint32_t nlb;
+};
+
 static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
 static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
 static struct spdk_nvme_transport_id g_trid = {};
@@ -140,36 +147,104 @@ cleanup(void)
     }
 }
 
+/* allocate io qpair & free io qpair start */
+static void
+reset_zone_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
+{
+    struct io_task *task = (struct io_task *)cb_arg;
+
+    if (spdk_nvme_cpl_is_error(cpl)) {
+        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
+        fprintf(stderr, "Reset all zone error - status = %s\n", 
+                spdk_nvme_cpl_get_status_string(&cpl->status));
+    }
+    outstanding_commands--;
+}
+
+static void
+reset_all_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
+{
+    struct io_task task;
+    task.qpair = qpair;
+    task.opc = SPDK_NVME_OPC_ZONE_MGMT_SEND;
+    task.slba = 0;
+    task.nlb = 0;
+
+    outstanding_commands = 0;
+    int err = spdk_nvme_zns_reset_zone(ns, qpair, 0, true, reset_zone_complete, &task);
+    if (err) {
+            fprintf(stderr, "Reset all zones failed\n");
+            exit(1);
+    } else {
+        outstanding_commands++;
+    }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
+    }
+}
+
+static void
+free_qpair(struct spdk_nvme_qpair *qpair)
+{
+    spdk_nvme_ctrlr_free_io_qpair(qpair);
+}
+
+static struct ns_entry *
+alloc_qpair(void)
+{
+    struct ns_entry *ns_entry;
+
+    /* specify namespace and allocate io qpair for the namespace */
+    ns_entry = TAILQ_FIRST(&g_namespaces);
+    ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
+    if (ns_entry->qpair == NULL) {
+        printf("ERROR: spdk_nvme_ctrlr_alloc_io_qpair() failed\n");
+        return NULL;
+    }
+
+    if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
+        /* reset zone before write */
+        g_zone = true;
+        reset_all_zone(ns_entry->ns, ns_entry->qpair);
+        printf("Reset all zone complete.\n");
+    } else {
+        printf("Not ZNS namespace\n");
+    }
+
+    return ns_entry;
+}
+/* allocate io qpair & free io qpair end */
+
 /* report zone start */
 static void
-identify_zns_info(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
+zone_env(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 {
     uint64_t lba_size = spdk_nvme_ns_get_sector_size(ns);    
     uint64_t zone_num = spdk_nvme_zns_ns_get_num_zones(ns);
-    uint64_t zone_size_bytes = spdk_nvme_zns_ns_get_zone_size(ns);
     uint64_t zone_size_blocks = spdk_nvme_zns_ns_get_zone_size_sectors(ns);
     uint32_t max_zone_append_size = spdk_nvme_zns_ctrlr_get_max_zone_append_size(ctrlr);
     uint32_t max_open_zone = spdk_nvme_zns_ns_get_max_open_zones(ns);
     uint32_t max_active_zone = spdk_nvme_zns_ns_get_max_active_zones(ns);    
 
-
     print_uline('=', printf("\nNVMe ZNS Zone Information\n"));
-    printf("Size of LBA: %lu (bytes)\n", lba_size);
-    printf("Number of Zone: %lu\n", zone_num);
-    printf("Size of Zone: %lu (bytes) / %lu (blocks)\n", zone_size_bytes, zone_size_blocks);
-    printf("Max Zone Append Size: %u\n", max_zone_append_size);
-    printf("Max Open Zone: %u\n", max_open_zone);
-    printf("Max Active Zone: %u\n", max_active_zone);
+    printf("%-20s: %lu (bytes)\n", "Size of LBA", lba_size);
+    printf("%-20s: %lu\n", "Number of Zone", zone_num);
+    printf("%-20s: 0x%lx (blocks)\n", "Size of Zone", zone_size_blocks);
+    printf("%-20s: %lu (blocks)\n", "Max Zone Append Size", max_zone_append_size / lba_size);
+    printf("%-20s: %u\n", "Max Open Zone", max_open_zone);
+    printf("%-20s: %u\n", "Max Active Zone",  max_active_zone);
     printf("\n");
 }
 
 static void
-get_zns_zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
+zone_report_completion(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
-    struct spdk_nvme_qpair *qpair = (struct spdk_nvme_qpair *) cb_arg;
+    struct io_task *task = (struct io_task *)cb_arg;
+
     if (spdk_nvme_cpl_is_error(cpl)) {
-        printf("Zone report error - ");
-        spdk_nvme_qpair_print_completion(qpair, (struct spdk_nvme_cpl *)cpl);    
+        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
+        fprintf(stderr, "Zone report error - slba = 0x%lx, status = %s\n", 
+                task->slba, spdk_nvme_cpl_get_status_string(&cpl->status));
     }
     outstanding_commands--;
 }
@@ -225,14 +300,14 @@ static void print_zns_zone(uint8_t *report, uint32_t index, uint32_t zdes)
 static void report_zone(void)
 {
     int rc = 0;
-   
+    struct io_task task;
     struct ns_entry *ns_entry = TAILQ_FIRST(&g_namespaces);
     
     if (spdk_nvme_ns_get_csi(ns_entry->ns) != SPDK_NVME_CSI_ZNS) {
         return;
     }
 
-    identify_zns_info(ns_entry->ctrlr, ns_entry->ns);
+    zone_env(ns_entry->ctrlr, ns_entry->ns);
     uint64_t zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
     uint64_t total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
 
@@ -268,16 +343,21 @@ static void report_zone(void)
     uint64_t handled_zones = 0;
     uint64_t slba = 0;
     while (handled_zones < zones_to_print) {
+        task.qpair = ns_entry->qpair;
+        task.opc = SPDK_NVME_OPC_ZONE_MGMT_RECV;    
+        task.slba = slba;
+        task.nlb = 0;
+
         memset(report_buf, 0, report_bufsize);
 
         if (zdes) {
             //uint64_t max_zones_per_buf = (report_bufsize - zrs) / (zds + zdes);
             rc = spdk_nvme_zns_ext_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
-                            slba, SPDK_NVME_ZRA_LIST_ALL, true, get_zns_zone_report_completion, ns_entry->qpair);
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true, zone_report_completion, &task);
         } else {
             //uint64_t max_zones_per_buf = (report_bufsize - zrs) / zds;
             rc = spdk_nvme_zns_report_zones(ns_entry->ns, ns_entry->qpair, report_buf, report_bufsize,
-                            slba, SPDK_NVME_ZRA_LIST_ALL, true, get_zns_zone_report_completion, ns_entry->qpair);
+                            slba, SPDK_NVME_ZRA_LIST_ALL, true, zone_report_completion, &task);
         }
 
         if (rc) {
@@ -308,10 +388,11 @@ static void report_zone(void)
 static void
 replay_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
-    struct spdk_nvme_qpair *qpair = (struct spdk_nvme_qpair *) cb_arg;
+    struct io_task *task = (struct io_task *)cb_arg;
     if (spdk_nvme_cpl_is_error(cpl)) {
-        fprintf(stderr, "Replay error - ");
-        spdk_nvme_qpair_print_completion(qpair, (struct spdk_nvme_cpl *)cpl);
+        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
+        fprintf(stderr, "Replay error - opc = 0x%x, slba = 0x%lx, nlb = %d, status = %s\n",
+                 task->opc, task->slba, task->nlb, spdk_nvme_cpl_get_status_string(&cpl->status));
     }
     outstanding_commands--;
 }
@@ -319,10 +400,11 @@ replay_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 static int
 process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bin_file_data *d)
 {
-    int rc = 0;
+    int err = 0;
     uint64_t slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
     uint32_t nlb = (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
-
+    //printf("slba = 0x%lx, nlb = %d\n", slba, nlb);
+    
     /* allocate data buffers for SPDK NVMe I/O operations */
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns); 
     char *replay_buf = (char *)spdk_zmalloc(nlb * block_size, block_size,
@@ -331,36 +413,43 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
         perror("Fail to malloc replay_buf");
         exit(1);
     }   
+    
     /* read write replay */
     outstanding_commands = 0;
+
+    struct io_task task;
+    task.qpair = qpair;
+    task.opc = d->opc;
+    task.slba = slba;
+    task.nlb = nlb;
 
     switch (d->opc) {
     case SPDK_NVME_OPC_READ:
     case SPDK_NVME_OPC_COMPARE:
         memset(replay_buf, 0, (size_t)nlb * block_size);
-        rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, &task, 0);
         break;
     case SPDK_NVME_OPC_WRITE:
     case SPDK_NVME_OPC_ZONE_APPEND:
         snprintf(replay_buf, (size_t)nlb * block_size, "%s", "Hello World!\n");
-        rc = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_zns_zone_append(ns, qpair, replay_buf, slba, nlb, replay_complete, &task, 0);
         break;
     case SPDK_NVME_OPC_WRITE_ZEROES:
-        rc = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, &task, 0);
         break;
     case SPDK_NVME_OPC_ZONE_MGMT_SEND:
         bool select_all = (d->cdw13 & (uint32_t)1 << 8) ? true : false;
         uint8_t zone_action = (uint8_t)(d->cdw13 & UINT8BIT_MASK);
         if (zone_action == SPDK_NVME_ZONE_OPEN)
-            rc = spdk_nvme_zns_open_zone(ns, qpair, slba, select_all, replay_complete, qpair);
+            err = spdk_nvme_zns_open_zone(ns, qpair, slba, select_all, replay_complete, &task);
         else if (zone_action == SPDK_NVME_ZONE_CLOSE)
-            rc = spdk_nvme_zns_close_zone(ns, qpair, slba, select_all, replay_complete, qpair);
+            err = spdk_nvme_zns_close_zone(ns, qpair, slba, select_all, replay_complete, &task);
         else if (zone_action == SPDK_NVME_ZONE_FINISH)
-            rc = spdk_nvme_zns_finish_zone(ns, qpair, slba, select_all, replay_complete, qpair);
+            err = spdk_nvme_zns_finish_zone(ns, qpair, slba, select_all, replay_complete, &task);
         else if (zone_action == SPDK_NVME_ZONE_RESET)
-            rc = spdk_nvme_zns_reset_zone(ns, qpair, slba, select_all, replay_complete, qpair);
+            err = spdk_nvme_zns_reset_zone(ns, qpair, slba, select_all, replay_complete, &task);
         else if (zone_action == SPDK_NVME_ZONE_OFFLINE)
-            rc = spdk_nvme_zns_offline_zone(ns, qpair, slba, select_all, replay_complete, qpair);
+            err = spdk_nvme_zns_offline_zone(ns, qpair, slba, select_all, replay_complete, &task);
         else {
             outstanding_commands--;
         }
@@ -369,8 +458,8 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
         outstanding_commands--;
     }
 
-    if (rc) {
-            fprintf(stderr, "Replay failed\n");
+    if (err) {
+            fprintf(stderr, "Replay failed, err = %d\n", err);
     } else {
             outstanding_commands++;
     }
@@ -380,15 +469,16 @@ process_zns_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struc
     }
     
     spdk_free(replay_buf);
-    return rc;
+    return err;
 }
 
 static int
 process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bin_file_data *d)
 {
-    int rc = 0;
+    int err = 0;
     uint64_t slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
     uint32_t nlb = (uint32_t)(d->cdw12 & UINT16BIT_MASK) + 1;
+    //printf("slba = 0x%lx, nlb = %d\n", slba, nlb);
 
     /* allocate data buffers for SPDK NVMe I/O operations */
     uint32_t block_size = spdk_nvme_ns_get_sector_size(ns);
@@ -398,28 +488,35 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
         perror("Fail to malloc replay_buf");
         exit(1); 
     }
+
     /* read write replay */
     outstanding_commands = 0;
+    
+    struct io_task task;
+    task.qpair = qpair;
+    task.opc = d->opc;
+    task.slba = slba;
+    task.nlb = nlb;
 
     switch (d->opc) {
     case SPDK_NVME_OPC_READ:
     case SPDK_NVME_OPC_COMPARE:
         memset(replay_buf, 0, (size_t)nlb * block_size);
-        rc = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_ns_cmd_read(ns, qpair, replay_buf, slba, nlb, replay_complete, &task, 0);
         break;
     case SPDK_NVME_OPC_WRITE:
         snprintf(replay_buf, (size_t)nlb * block_size, "%s", "Hello World!\n");
-        rc = spdk_nvme_ns_cmd_write(ns, qpair, replay_buf, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_ns_cmd_write(ns, qpair, replay_buf, slba, nlb, replay_complete, &task, 0);
         break;
     case SPDK_NVME_OPC_WRITE_ZEROES:
-        rc = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, qpair, 0);
+        err = spdk_nvme_ns_cmd_write_zeroes(ns, qpair, slba, nlb, replay_complete, &task, 0);
         break;
     default:
         outstanding_commands--; 
     }
 
-    if (rc) {
-            fprintf(stderr, "Replay failed\n");
+    if (err) {
+            fprintf(stderr, "Replay failed, err = %d\n", err);
     } else {
             outstanding_commands++;
     }
@@ -429,69 +526,9 @@ process_replay(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, struct bi
     }
     
     spdk_free(replay_buf);
-    return rc;
+    return err;
 }
 /* replay workload end */
-
-/* allocate io qpair & free io qpair start */
-static void
-reset_zone_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
-{
-    struct spdk_nvme_qpair *qpair = (struct spdk_nvme_qpair *) cb_arg;
-    if (spdk_nvme_cpl_is_error(cpl)) {
-        printf("Reset all zones error - ");
-        spdk_nvme_qpair_print_completion(qpair, (struct spdk_nvme_cpl *)cpl);
-    }
-    outstanding_commands--;
-}
-
-static void
-reset_all_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
-{
-    outstanding_commands = 0;
-    int rc = spdk_nvme_zns_reset_zone(ns, qpair, 0, true, reset_zone_complete, qpair);
-    if (rc) {
-            fprintf(stderr, "Reset all zones failed\n");
-            exit(1);
-    } else {
-        outstanding_commands++;
-    }
-    while (outstanding_commands) {
-        spdk_nvme_qpair_process_completions(qpair, 0);
-    }
-}
-
-static void
-free_qpair(struct spdk_nvme_qpair *qpair)
-{
-    spdk_nvme_ctrlr_free_io_qpair(qpair);
-}
-
-static struct ns_entry *
-alloc_qpair(void)
-{
-    struct ns_entry *ns_entry;
-    
-    /* specify namespace and allocate io qpair for the namespace */
-    ns_entry = TAILQ_FIRST(&g_namespaces);
-    ns_entry->qpair = spdk_nvme_ctrlr_alloc_io_qpair(ns_entry->ctrlr, NULL, 0);
-    if (ns_entry->qpair == NULL) {
-        printf("ERROR: spdk_nvme_ctrlr_alloc_io_qpair() failed\n");
-        return NULL;
-    }
-
-    if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
-        /* reset zone before write */
-        g_zone = true; 
-        reset_all_zone(ns_entry->ns, ns_entry->qpair);
-        printf("Reset all zone complete.\n");
-    } else {
-        printf("Not ZNS namespace\n");
-    }
-
-    return ns_entry;
-}
-/* allocate io qpair & free io qpair end */
 
 static void
 usage(const char *program_name)
@@ -620,6 +657,10 @@ main(int argc, char **argv)
         }
 
         for (size_t i = 0; i < read_entry; i++) {
+            if (strcmp(buffer[i].tpoint_name, "NVME_IO_COMPLETE") == 0) {
+                continue;
+            }
+
             if (g_zone) {
                 rc = process_zns_replay(ns_entry->ns, ns_entry->qpair, &buffer[i]);
             } else {
