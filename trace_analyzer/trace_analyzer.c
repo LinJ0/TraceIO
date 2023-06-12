@@ -308,7 +308,7 @@ iops(uint64_t end_tsc, uint64_t req_num)
     if (req_num ==0 || end_tsc == 0) {
         return IOPS;
     }
-    float end_sec = get_us_from_tsc(end_tsc, g_tsc_rate) / 1000000;
+    float end_sec = get_us_from_tsc(end_tsc, g_tsc_rate) / (1000 * 1000);
     return IOPS = (float)req_num / end_sec;
 }
 
@@ -330,7 +330,7 @@ process_analysis_round1(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w
     }
 
     if (strcmp(d->tpoint_name, "NVME_IO_COMPLETE") == 0) {
-        g_end_tsc = d->tsc_sc_time;                                 /* for calculate IOPS */
+        g_end_tsc = d->tsc_timestamp;                               /* for calculate IOPS */
         latency_min_max(d->tsc_sc_time, d->tsc_rate);               /* for calculate latency (min & max) */
         latency_total(d->tsc_sc_time);                              /* for calculate latency (avg) */
     }
@@ -828,16 +828,16 @@ main(int argc, char **argv)
 
     print_uline('=', printf("\nTrace Analysis\n"));
 
-    printf("%-15s  ", "IOPS:");
+    printf("%-20s:  ", "IOPS");
     printf("%-20.3f \n", iops(g_end_tsc, g_req_num));
 
-    printf("%-15s  ", "Latency (us):");
+    printf("%-20s:  ", "Latency (us)");
     printf("MIN   %-20.3f MAX   %-20.3f AVG %-20.3f\n", g_latency_us_min, g_latency_us_max, g_latency_us_avg);
     
-    printf("%-15s  ", "Number of R/W:");
+    printf("%-20s:  ", "Number of R/W");
     printf("READ  %-20jd WRITE %-20jd R/W %6.3f %%\n", g_read_cnt, g_write_cnt, rw_ratio(g_read_cnt, g_write_cnt));
 
-    printf("\nR/W Request size: \n");
+    printf("%-20s:\n", "R/W Request size");
     for (uint64_t i = 0; i < g_max_transfer_block; i++) {
         if (!r_iosize[i] && !w_iosize[i])
             continue;
