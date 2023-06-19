@@ -104,7 +104,7 @@ sigint_handler(pid_t spdk_pid)
     printf("spdk_trace_record receive SIGINT\n");
 
     if (spdk_pid > 0) {
-        // send SIGINT to child_p2
+        /* send SIGINT to spdk_trace_record */
         if (kill(spdk_pid, SIGINT) == 0) {
             printf("send SIGINT to spdk_trace_record\n");
         } else {
