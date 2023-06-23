@@ -9,13 +9,13 @@
 #define UINT16BIT_MASK 0xFFFF
 #define UINT32BIT_MASK 0xFFFFFFFF
 
-struct bin_file_data {
+struct trace_io_entry {
     uint32_t lcore;
     uint64_t tsc_rate;
     uint64_t tsc_timestamp;
     uint64_t obj_id;
-    uint64_t obj_start; /* object submit start time */
-    uint64_t tsc_sc_time; /* object from submit to complete */
+    uint64_t tsc_obj_submit;    /* object submit start time */
+    uint64_t tsc_sc_time;       /* object from submit to complete */
     char     tpoint_name[32];       
     uint16_t opc;
     uint16_t cid;

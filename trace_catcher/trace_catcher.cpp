@@ -13,7 +13,7 @@ extern "C" {
 #include "spdk/util.h"
 }
 
-#define ENTRY_MAX 10000 /* number of sizeof(struct bin_file_data) */
+#define ENTRY_MAX 10000 /* number of trace_io_entry */
 
 static struct spdk_trace_parser *g_parser;
 static const struct spdk_trace_flags *g_flags;
@@ -53,7 +53,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
 {
     struct spdk_trace_entry *e = entry->entry;
     const struct spdk_trace_tpoint *d = &g_flags->tpoint[e->tpoint_id];
-    struct bin_file_data buffer; 
+    struct trace_io_entry buffer; 
     buffer.lcore = entry->lcore;
     buffer.tsc_rate = g_tsc_rate;
     buffer.tsc_timestamp = e->tsc - g_tsc_base;    
@@ -61,10 +61,10 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
     
     if (!d->new_object && d->object_type != OBJECT_NONE) {
         buffer.tsc_sc_time = e->tsc - entry->object_start;
-        buffer.obj_start = entry->object_start - g_tsc_base;
+        buffer.tsc_obj_submit = entry->object_start - g_tsc_base;
     } else {
         buffer.tsc_sc_time = 0;
-        buffer.obj_start = entry->object_start - g_tsc_base;
+        buffer.tsc_obj_submit = entry->object_start - g_tsc_base;
     }
 
     //snprintf(buffer.tpoint_name, sizeof(buffer.tpoint_name), d->name);
@@ -109,7 +109,7 @@ process_output_file(struct spdk_trace_parser_entry *entry, FILE *fptr)
         fprintf(stderr, "parse trace fail\n");
         exit(1);
     }
-    fwrite(&buffer, sizeof(struct bin_file_data), 1, fptr);
+    fwrite(&buffer, sizeof(struct trace_io_entry), 1, fptr);
 }
 
 static void
@@ -280,7 +280,7 @@ main(int argc, char **argv)
         fseek(fptr, 0, SEEK_END);
         size_t file_size = ftell(fptr);
         rewind(fptr);
-        size_t total_entry = file_size / sizeof(struct bin_file_data);
+        size_t total_entry = file_size / sizeof(struct trace_io_entry);
         size_t remain_entry = total_entry;
         printf("total_entry = %ld\n", total_entry);
 
@@ -288,9 +288,9 @@ main(int argc, char **argv)
             //printf("remain_entry = %ld\n", remain_entry);
             size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
             remain_entry -= buffer_entry;
-            struct bin_file_data buffer[buffer_entry];
+            struct trace_io_entry buffer[buffer_entry];
 
-            size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+            size_t read_entry = fread(&buffer, sizeof(struct trace_io_entry), buffer_entry, fptr);
             //printf("read_entry = %ld\n", read_entry);
             if (buffer_entry != read_entry) {
                 fprintf(stderr, "Fail to read input file\n");
@@ -306,7 +306,7 @@ main(int argc, char **argv)
                 //printf("cid: %3d  ", buffer[i].cid);
                 //printf("obj_id: %ld  ", buffer[i].obj_id);
                 printf("tsc_sc_time: %15ld  ", buffer[i].tsc_sc_time);
-                printf("obj_start_time: %15ld  ", buffer[i].obj_start);
+                printf("tsc_obj_submit: %15ld  ", buffer[i].tsc_obj_submit);
                 //printf("nsid: %d  ", buffer[i].nsid);
                 //printf("cpl: %d  ", buffer[i].cpl);
                 printf("opc: 0x%2x  ", buffer[i].opc); 

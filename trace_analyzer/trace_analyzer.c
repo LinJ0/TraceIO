@@ -9,7 +9,7 @@
 #include "spdk/nvme_spec.h"
 #include "../include/trace_io.h"
 
-#define ENTRY_MAX 10000 /* number of sizeof(struct bin_file_data) */
+#define ENTRY_MAX 10000 /* number of trace_io_entry */
 
 struct ctrlr_entry {
     struct spdk_nvme_ctrlr *ctrlr;
@@ -313,7 +313,7 @@ iops(uint64_t end_tsc, uint64_t req_num)
 }
 
 static int
-process_analysis_round1(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w_iosize)
+process_analysis_round1(struct trace_io_entry *d, uint32_t *r_iosize, uint32_t *w_iosize)
 {
     if (!g_tsc_rate) { /* for calculate g_latency_us_avg */
         g_tsc_rate = d->tsc_rate;
@@ -339,7 +339,7 @@ process_analysis_round1(struct bin_file_data *d, uint32_t *r_iosize, uint32_t *w
 }
 
 static int
-process_analysis_round2(struct bin_file_data *d, uint16_t *r_blk, uint16_t *w_blk)
+process_analysis_round2(struct trace_io_entry *d, uint16_t *r_blk, uint16_t *w_blk)
 {
     int rc;
     uint64_t slba = 0;    
@@ -530,7 +530,7 @@ set_opc_flags(uint8_t opc, bool *cdw10, bool *cdw11, bool *cdw12, bool *cdw13)
 }
 
 static int
-process_print_trace(struct bin_file_data *d)
+process_print_trace(struct trace_io_entry *d)
 {
     int     rc = 0;
     const char *opc_name;
@@ -718,7 +718,7 @@ main(int argc, char **argv)
     fseek(fptr, 0, SEEK_END);
     size_t file_size = ftell(fptr);
     rewind(fptr);
-    size_t total_entry = file_size / sizeof(struct bin_file_data);
+    size_t total_entry = file_size / sizeof(struct trace_io_entry);
     g_req_num = total_entry >> 1; /* Get number of requests */
     //printf("Total number of request = %ld\n", g_req_num);
 
@@ -732,8 +732,8 @@ main(int argc, char **argv)
 
             size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
             remain_entry -= buffer_entry;
-            struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
-            size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+            struct trace_io_entry buffer[buffer_entry]; /* Allocate buffer for read file */
+            size_t read_entry = fread(&buffer, sizeof(struct trace_io_entry), buffer_entry, fptr);
             if (buffer_entry != read_entry) {
                 fprintf(stderr, "Fail to read input file\n");
             }
@@ -805,8 +805,8 @@ main(int argc, char **argv)
     while (!feof(fptr) && remain_entry) {
         size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
         remain_entry -= buffer_entry;
-        struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
-        size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+        struct trace_io_entry buffer[buffer_entry]; /* Allocate buffer for read file */
+        size_t read_entry = fread(&buffer, sizeof(struct trace_io_entry), buffer_entry, fptr);
         if (buffer_entry != read_entry) {
                 fprintf(stderr, "Fail to read input file\n");
         }
@@ -881,8 +881,8 @@ main(int argc, char **argv)
     while (!feof(fptr) && remain_entry) {
         size_t buffer_entry = (remain_entry > ENTRY_MAX) ? ENTRY_MAX : remain_entry;
         remain_entry -= buffer_entry;
-        struct bin_file_data buffer[buffer_entry]; /* Allocate buffer for read file */
-        size_t read_entry = fread(&buffer, sizeof(struct bin_file_data), buffer_entry, fptr);
+        struct trace_io_entry buffer[buffer_entry]; /* Allocate buffer for read file */
+        size_t read_entry = fread(&buffer, sizeof(struct trace_io_entry), buffer_entry, fptr);
         if (buffer_entry != read_entry) {
                 fprintf(stderr, "Fail to read input file\n");
         }
