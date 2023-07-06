@@ -23,13 +23,21 @@ struct ns_entry {
 	TAILQ_ENTRY(ns_entry) link;
 	struct spdk_nvme_qpair *qpair;
 };
-
+/* variables for init nvme */
 static TAILQ_HEAD(, ctrlr_entry) g_controllers = TAILQ_HEAD_INITIALIZER(g_controllers);
 static TAILQ_HEAD(, ns_entry) g_namespaces = TAILQ_HEAD_INITIALIZER(g_namespaces);
 static struct spdk_nvme_transport_id g_trid = {};
+/* variables for parse_args */
 static bool g_print_tsc = false;
 static bool g_print_trace = false;
 static bool g_input_file = false;
+static bool g_print_rwblock = false;
+/* info about nvme device & zone*/
+static bool g_zone = false;     /* namespace is ZNS */
+static uint64_t g_ns_block = 0; /* number of blocks in a namespace */
+static uint64_t g_ns_zone = 0;  /* number of zones in a namespace */
+static size_t g_max_transfer_block = 0;
+static uint64_t g_zone_size_lba = 0;
 
 static float
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
@@ -261,7 +269,7 @@ latency_avg(int number_of_io)
 }
 
 static int
-blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t *w_blk)
+block_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_block, uint16_t *w_block)
 {
     int rc = 0;
     uint64_t idx = slba;
@@ -270,14 +278,14 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
     case SPDK_NVME_OPC_READ:
     case SPDK_NVME_OPC_COMPARE: 
         for (int i = 0; i < nlb; i++) {
-            r_blk[idx + i]++;
+            r_block[idx + i]++;
         }
         break;        
     case SPDK_NVME_OPC_WRITE:
     case SPDK_NVME_OPC_ZONE_APPEND:
     case SPDK_NVME_OPC_WRITE_ZEROES:
         for (int i = 0; i < nlb; i++) {
-            w_blk[idx + i]++;
+            w_block[idx + i]++;
         }
         break;
     case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
@@ -297,6 +305,41 @@ blk_counter(uint8_t opc, uint64_t slba, uint16_t nlb, uint16_t *r_blk, uint16_t 
         break; 
     }   
     return rc;    
+}
+
+static int
+zone_counter(uint8_t opc, uint64_t slba, uint16_t *r_zone, uint16_t *w_zone)
+{
+    int rc = 0;
+    uint64_t zidx = slba / g_zone_size_lba;
+
+    switch (opc) {
+    case SPDK_NVME_OPC_READ:
+    case SPDK_NVME_OPC_COMPARE:
+        r_zone[zidx]++;
+        break;
+    case SPDK_NVME_OPC_WRITE:
+    case SPDK_NVME_OPC_ZONE_APPEND:
+    case SPDK_NVME_OPC_WRITE_ZEROES:
+        w_zone[zidx]++;
+        break;
+    case SPDK_NVME_OPC_WRITE_UNCORRECTABLE:
+    case SPDK_NVME_OPC_COPY:
+    case SPDK_NVME_OPC_VERIFY:
+    case SPDK_NVME_OPC_DATASET_MANAGEMENT:
+    case SPDK_NVME_OPC_FLUSH:
+    case SPDK_NVME_OPC_ZONE_MGMT_RECV:
+    case SPDK_NVME_OPC_ZONE_MGMT_SEND:
+    case SPDK_NVME_OPC_RESERVATION_REGISTER:
+    case SPDK_NVME_OPC_RESERVATION_REPORT:
+    case SPDK_NVME_OPC_RESERVATION_ACQUIRE:
+    case SPDK_NVME_OPC_RESERVATION_RELEASE:
+        break;
+    default:
+        rc = 1;
+        break;
+    }
+    return rc;
 }
 
 static uint64_t g_end_tsc = 0;
@@ -339,23 +382,33 @@ process_analysis_round1(struct trace_io_entry *d, uint32_t *r_iosize, uint32_t *
 }
 
 static int
-process_analysis_round2(struct trace_io_entry *d, uint16_t *r_blk, uint16_t *w_blk)
+process_analysis_round2(struct trace_io_entry *d, uint16_t *r_blk, uint16_t *w_blk,  uint16_t *r_zone, uint16_t *w_zone)
 {
     int rc;
     uint64_t slba = 0;    
     if (strcmp(d->tpoint_name, "NVME_IO_SUBMIT") == 0 && d->opc != SPDK_NVME_OPC_DATASET_MANAGEMENT) {
         slba = (uint64_t)d->cdw10 | ((uint64_t)d->cdw11 & UINT32BIT_MASK) << 32;
 
-        if (d->opc != SPDK_NVME_OPC_ZONE_MGMT_RECV && d->opc != SPDK_NVME_OPC_COPY) {
+        if (d->opc != SPDK_NVME_OPC_ZONE_MGMT_RECV && 
+            d->opc != SPDK_NVME_OPC_ZONE_MGMT_SEND &&
+            d->opc != SPDK_NVME_OPC_COPY) {
             uint32_t nlb = (d->cdw12 & UINT16BIT_MASK) + 1;
-            rc = blk_counter(d->opc, slba, nlb, r_blk, w_blk);      /* for calculate r/w # in a block */
+            rc = block_counter(d->opc, slba, nlb, r_blk, w_blk);      /* for calculate r/w # in a block */
+            if (rc) {
+                printf("Count block read / write fail\n");
+                return rc;
+            }  
+            
+        }
+
+        if (g_zone) {
+            rc = zone_counter(d->opc, slba, r_zone, w_zone);          /* for calculate r/w # in a zone */
+            if (rc) {
+                printf("Count block read / write fail\n");
+                return rc;
+            }
         }
     }
-    if (rc) {
-        printf("Count block read / write fail\n");
-        return rc;
-    }
-
     return rc;
 }
 /* trace analysis end */
@@ -614,11 +667,6 @@ process_print_trace(struct trace_io_entry *d)
 /* print trace end */
 
 /* Get namespace data start */
-static uint64_t g_ns_block = 0; /* number of blocks in a namespace */
-static size_t g_max_transfer_block = 0;
-static bool g_zone = false;
-static uint64_t g_zone_size_lba = 0;
-static uint64_t g_total_zones = 0;
 static void
 get_ns_info(void)
 {
@@ -635,7 +683,7 @@ get_ns_info(void)
     if (spdk_nvme_ns_get_csi(ns_entry->ns) == SPDK_NVME_CSI_ZNS) {
         g_zone = true;
         g_zone_size_lba = spdk_nvme_zns_ns_get_zone_size_sectors(ns_entry->ns);
-        g_total_zones = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
+        g_ns_zone = spdk_nvme_zns_ns_get_num_zones(ns_entry->ns);
     }
 
 }
@@ -657,7 +705,7 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
 {
     int op;
 
-    while ((op = getopt(argc, argv, "f:dt")) != -1) {
+    while ((op = getopt(argc, argv, "f:dtb")) != -1) {
         switch (op) {
         case 'f':
             g_input_file = true;
@@ -665,6 +713,9 @@ parse_args(int argc, char **argv, char *file_name, size_t file_name_size)
             break;
         case 'd':
             g_print_trace = true;
+            break;
+        case 'b':
+            g_print_rwblock = true;
             break;
         case 't':
             g_print_tsc = true;
@@ -773,8 +824,6 @@ main(int argc, char **argv)
     /* Get namespace data */
     get_ns_info();
     cleanup();
-    //printf("Number of blocks per namespace = 0x%lx\n", g_ns_block);
-    //printf("Namespace max transfer block: %lu\n", g_max_transfer_block);
 
     /*
      * Trace analysis round 1: 
@@ -872,9 +921,25 @@ main(int argc, char **argv)
     memset(r_blk, 0, g_ns_block * sizeof(uint16_t));
     memset(w_blk, 0, g_ns_block * sizeof(uint16_t)); 
 
-    uint16_t r_zone[g_total_zones], w_zone[g_total_zones];
-    memset(r_zone, 0, g_total_zones * sizeof(uint16_t));
-    memset(w_zone, 0, g_total_zones * sizeof(uint16_t));
+    uint16_t *r_zone = (uint16_t *)malloc(g_ns_zone * sizeof(uint16_t));
+    if (!r_zone) {
+        fprintf(stderr, "Fall to allocate memory for r_zone\n");
+        free(r_blk);
+        free(w_blk);
+        rc = 1;
+        return rc;
+    }
+    uint16_t *w_zone = (uint16_t *)malloc(g_ns_zone * sizeof(uint16_t));
+    if (!w_blk) {
+        fprintf(stderr, "Fall to allocate memory for w_zone\n");
+        free(r_blk);
+        free(w_blk);
+        free(r_zone);
+        rc = 1;
+        return rc;
+    }    
+    memset(r_zone, 0, g_ns_zone * sizeof(uint16_t));
+    memset(w_zone, 0, g_ns_zone * sizeof(uint16_t));
 
     rewind(fptr);
     remain_entry = total_entry;
@@ -888,11 +953,13 @@ main(int argc, char **argv)
         }
 
         for (size_t i = 0; i < read_entry; i++) {
-            rc = process_analysis_round2(&buffer[i], r_blk, w_blk);
+            rc = process_analysis_round2(&buffer[i], r_blk, w_blk, r_zone, w_zone);
             if (rc != 0) {
                 fprintf(stderr, "Analysis error\n");
                 free(r_blk);
                 free(w_blk);
+                free(r_zone);
+                free(w_zone);
                 fclose(fptr);
                 return rc; 
             }
@@ -901,37 +968,34 @@ main(int argc, char **argv)
 
     fclose(fptr);
 
-    printf("\nNumber of R/W in a block:\n");    
-    for (uint64_t i = 0, cnt = 0, zidx = 0; i < g_ns_block; i++) {
-        if (!r_blk[i] && !w_blk[i])
-            continue;
-        cnt++;
-        printf("0x%013lx  ", i);
-        printf("r %-7d ", r_blk[i]);
-        printf("w %-7d ", w_blk[i]);
-        printf("r+w %-7d ", r_blk[i] + w_blk[i]);
+    if (g_print_rwblock) {
+        printf("\nNumber of R/W in a block:\n");    
+        for (uint64_t i = 0, cnt = 0; i < g_ns_block; i++) {
+            if (!r_blk[i] && !w_blk[i])
+                continue;
+            cnt++;
+            printf("0x%013lx  ", i);
+            printf("r %-7d ", r_blk[i]);
+            printf("w %-7d ", w_blk[i]);
+            printf("r+w %-7d ", r_blk[i] + w_blk[i]);
 
-        if (g_zone) {
-        zidx = i / g_zone_size_lba;
-        r_zone[zidx] += r_blk[i];
-        w_zone[zidx] += w_blk[i];
+            if (cnt % 4 == 0)
+                printf("\n");
         }
-
-        if (cnt % 4 == 0)
-            printf("\n");
+        printf("\n");
     }
-    printf("\n");
 
     if (g_zone) {
         printf("\nNumber of R/W in a zone:\n");
-        for (uint64_t i = 0, cnt = 0; i < g_total_zones; i++) {
+        for (uint64_t i = 0, cnt = 0; i < g_ns_zone; i++) {
             if (!r_zone[i] && !w_zone[i])
                 continue;
             cnt++;
-            printf("zone %010ld  ", i); 
+            printf("ZSLBA 0x%08lx  ", i * g_ns_zone); 
             printf("r %-7d ", r_zone[i]);
             printf("w %-7d ", w_zone[i]);
             printf("r+w %-7d ", r_zone[i] + w_zone[i]);
+
             if (cnt % 4 == 0)
                 printf("\n");
         }
@@ -940,6 +1004,8 @@ main(int argc, char **argv)
 
     free(r_blk);
     free(w_blk);
+    free(r_zone);
+    free(w_zone);
     spdk_env_fini();
     return rc;
 }
