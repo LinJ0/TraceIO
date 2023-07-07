@@ -991,7 +991,7 @@ main(int argc, char **argv)
             if (!r_zone[i] && !w_zone[i])
                 continue;
             cnt++;
-            printf("ZSLBA 0x%08lx  ", i * g_ns_zone); 
+            printf("ZSLBA 0x%08lx  ", i * g_zone_size_lba); 
             printf("r %-7d ", r_zone[i]);
             printf("w %-7d ", w_zone[i]);
             printf("r+w %-7d ", r_zone[i] + w_zone[i]);
