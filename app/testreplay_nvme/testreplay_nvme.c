@@ -299,43 +299,6 @@ zns_info(struct ns_entry *ns_entry)
 
 /* zone mgmt send start */
 static void
-finish_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
-{
-    struct io_task *task = (struct io_task *)cb_arg;
-
-    if (spdk_nvme_cpl_is_error(cpl)) {
-        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
-        fprintf(stderr, "Finish zone error - zslba = 0x%lx, status = %s\n",
-                task->slba, spdk_nvme_cpl_get_status_string(&cpl->status));
-    }
-    
-    if (task) {
-        if (task->buf) {
-            spdk_free(task->buf);
-        }
-        free(task);
-    }
-    outstanding_commands--;
-}
-
-static void
-finish_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zslba)
-{
-    struct io_task *task = (struct io_task *)malloc(sizeof(struct io_task));
-    task->qpair = qpair;
-    task->slba = zslba;
-    task->nlb = 1;
-    task->buf = NULL;
-
-    outstanding_commands++;
-    int err = spdk_nvme_zns_finish_zone(ns, qpair, zslba, false, finish_complete, task);
-    if (err) {
-        fprintf(stderr, "Finish zone failed, err = %d.\n", err);
-        exit(1);
-    }
-}
-
-static void
 append_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
     struct io_task *task = (struct io_task *)cb_arg;
@@ -439,7 +402,6 @@ uint32_t g_max_open_zone = 0;
 uint32_t g_max_active_zone = 0;
 uint32_t g_max_append_blk = 0;
 
-void finish_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zslba);
 void append_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer, uint64_t zslba, uint32_t lba_count);
 void read_block(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer, uint64_t slba, uint32_t lba_count)
 */
@@ -463,32 +425,27 @@ send_seq(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
     }
 
     g_start_tsc = spdk_get_ticks();
-    for (uint64_t loop = 0; loop < (uint64_t)(g_num_zone / g_max_open_zone); loop++) {
-        for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
-            uint64_t zslba = zone * g_zone_sz_blk;
-            /* append one zone*/
-            for (uint64_t slba = zslba; slba < zslba + g_zone_capacity; slba = slba + g_num_io_block) {
-                if (slba + g_num_io_block > zslba + g_zone_capacity) { // if out of range
-                    break;
-                }
-                //printf("zslba = 0x%lx, slba = 0x%lx \n", zslba, slba);
-                for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0));
-                if (g_num_w > 0) {
-                    append_zone(ns, qpair, zslba, g_num_io_block);
-                    g_num_w--;
-                    //printf("write ");
-                } else if (!g_num_w && g_num_r) {
-                    read_block(ns, qpair, slba, g_num_io_block);
-                    g_num_r--;
-                    //printf("read  ");
-                }
-
-                //printf("g_num_w = %u g_num_r = %u\n", g_num_w, g_num_r);
+    for (uint64_t zone = 0; zone < g_max_open_zone; zone++) {
+        uint64_t zslba = zone * g_zone_sz_blk;
+        /* append one zone*/
+        for (uint64_t slba = zslba; slba < zslba + g_zone_capacity; slba = slba + g_num_io_block) {
+            if (slba + g_num_io_block > zslba + g_zone_capacity) { // if out of range
+                break;
             }
-            for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0));
-            finish_zone(ns, qpair, zslba);
+            //printf("zslba = 0x%lx, slba = 0x%lx \n", zslba, slba);
+            for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
+            if (g_num_w > 0) {
+                append_zone(ns, qpair, zslba, g_num_io_block);
+                g_num_w--;
+                //printf("write ");
+            } else if (!g_num_w && g_num_r) {
+                read_block(ns, qpair, slba, g_num_io_block);
+                g_num_r--;
+                //printf("read  ");
+            }
+            //printf("g_num_w = %u g_num_r = %u\n", g_num_w, g_num_r);
         }
-        for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0));
+        for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
     }
     g_end_tsc = spdk_get_ticks();
 }
@@ -503,45 +460,36 @@ send_rand(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
     }
 
     g_start_tsc = spdk_get_ticks();
-    for (uint64_t loop = 0; loop < (uint64_t)(g_num_zone / g_max_open_zone); loop++) {
-        uint32_t write = g_num_zone_w;
-        uint32_t read = g_num_zone_r;
-
-        for (uint64_t lba = 0; lba < g_zone_capacity; lba += g_num_io_block) {
-            if (g_zone_capacity - lba < g_num_io_block) { // if out of range
-                break;
-            }
-			
-            for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
-                uint64_t zslba = zone * g_zone_sz_blk;
-                uint64_t slba = zone * g_zone_sz_blk + lba;
-                for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-                if (write) {
-                    //printf("write zslba = 0x%lx\n", zslba); 
-                    append_zone(ns, qpair, zslba, g_num_io_block);
-                } else if (!write && read) {
-                    //printf("read slba = 0x%lx \n", slba);
-                    read_block(ns, qpair, slba, g_num_io_block);
-                }
-            }
-            if (write) {
-                write--;
-                //printf("write = %d\n", write); 
-            } else {
-                read--;
-                //printf("read = %d\n", read); 
-            }
-            for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
+    uint32_t write = g_num_zone_w;
+    uint32_t read = g_num_zone_r;
+		
+    for (uint64_t lba = 0; lba < g_zone_capacity; lba += g_num_io_block) {
+        if (g_zone_capacity - lba < g_num_io_block) { // if out of range
+            break;
         }
-
-        for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
+		
+        for (uint64_t zone = 0; zone < g_max_open_zone; zone++) {
             uint64_t zslba = zone * g_zone_sz_blk;
+            uint64_t slba = zone * g_zone_sz_blk + lba;
             for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-            //printf("finish zslba = 0x%lx\n", zslba);
-            finish_zone(ns, qpair, zslba);
+            if (write) {
+                //printf("write zslba = 0x%lx\n", zslba); 
+                append_zone(ns, qpair, zslba, g_num_io_block);
+            } else if (!write && read) {
+                //printf("read slba = 0x%lx \n", slba);
+                read_block(ns, qpair, slba, g_num_io_block);
+            }
+        }
+        if (write) {
+            write--;
+            //printf("write = %d\n", write); 
+        } else {
+            read--;
+            //printf("read = %d\n", read); 
         }
         for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
     }
+
     g_end_tsc = spdk_get_ticks();
 }
 
@@ -617,7 +565,7 @@ main(int argc, char **argv)
 
     /* Initialize env */
     spdk_env_opts_init(&env_opts);
-    env_opts.name = "mixrw_nvme";
+    env_opts.name = "testreplay_nvme";
     if (spdk_env_init(&env_opts) < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");
         return 1;
@@ -674,7 +622,7 @@ main(int argc, char **argv)
     /* Get namespace & zns information */
     zns_info(ns_entry);
     // for sequential
-    g_num_rw = g_num_zone * (g_zone_capacity / g_num_io_block);
+    g_num_rw = g_max_open_zone * (g_zone_capacity / g_num_io_block);
     g_num_r = g_num_rw * g_rw_ratio;
     g_num_w = g_num_rw - g_num_r;
     // for random

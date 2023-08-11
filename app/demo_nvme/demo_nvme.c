@@ -40,9 +40,6 @@ static uint32_t g_queue_depth = 0;
 static bool g_spdk_trace = false;
 static bool g_spdk_trace_record = false;
 static const char *g_tpoint_group_name = NULL;
-/* variable to specify workload type */
-static float g_rw_ratio = 1.0;
-static bool g_access_rand = false;
 /* variables for pool command complete */
 static uint32_t outstanding_commands = 0;
 
@@ -221,6 +218,7 @@ uint64_t g_zone_sz_blk = 0;
 uint32_t g_max_open_zone = 0;
 uint32_t g_max_active_zone = 0;
 uint32_t g_max_append_byte = 0;
+
 /* Get namespace & zns information start */
 static void
 report_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
@@ -299,6 +297,86 @@ zns_info(struct ns_entry *ns_entry)
 
 /* zone mgmt send start */
 static void
+open_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
+{
+    struct io_task *task = (struct io_task *)cb_arg;
+
+    if (spdk_nvme_cpl_is_error(cpl)) {
+        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
+        fprintf(stderr, "Open zone error - zslba = 0x%lx, status = %s\n",
+                task->slba, spdk_nvme_cpl_get_status_string(&cpl->status));
+    }
+
+    if (task) {
+        if (task->buf) {
+            spdk_free(task->buf);
+        }
+        free(task);
+    }
+    outstanding_commands--;
+}
+
+static void
+open_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zslba)
+{
+    struct io_task *task = (struct io_task *)malloc(sizeof(struct io_task));
+    task->qpair = qpair;
+    task->slba = zslba;
+    task->nlb = 1;
+    task->buf = NULL;
+
+    outstanding_commands++;
+    int err = spdk_nvme_zns_open_zone(ns, qpair, zslba, false, open_complete, task);
+    if (err) {
+        fprintf(stderr, "Open zone failed, err = %d.\n", err);
+        exit(1);
+    }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
+    }
+}
+
+static void
+close_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
+{
+    struct io_task *task = (struct io_task *)cb_arg;
+
+    if (spdk_nvme_cpl_is_error(cpl)) {
+        spdk_nvme_qpair_print_completion(task->qpair, (struct spdk_nvme_cpl *)cpl);
+        fprintf(stderr, "Close zone error - zslba = 0x%lx, status = %s\n",
+                task->slba, spdk_nvme_cpl_get_status_string(&cpl->status));
+    }
+
+    if (task) {
+        if (task->buf) {
+            spdk_free(task->buf);
+        }
+        free(task);
+    }
+    outstanding_commands--;
+}
+
+static void
+close_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zslba)
+{
+    struct io_task *task = (struct io_task *)malloc(sizeof(struct io_task));
+    task->qpair = qpair;
+    task->slba = zslba;
+    task->nlb = 1;
+    task->buf = NULL;
+
+    outstanding_commands++;
+    int err = spdk_nvme_zns_close_zone(ns, qpair, zslba, false, close_complete, task);
+    if (err) {
+        fprintf(stderr, "Close zone failed, err = %d.\n", err);
+        exit(1);
+    }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
+    }
+}
+
+static void
 finish_complete(void *cb_arg, const struct spdk_nvme_cpl *cpl)
 {
     struct io_task *task = (struct io_task *)cb_arg;
@@ -332,6 +410,9 @@ finish_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zsl
     if (err) {
         fprintf(stderr, "Finish zone failed, err = %d.\n", err);
         exit(1);
+    }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
     }
 }
 
@@ -378,6 +459,9 @@ append_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t zsl
     if (err) {
         fprintf(stderr, "Append zone failed, err = %d.\n", err);
         exit(1);
+    }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
     }
     //printf("outstanding = %u\n", outstanding_commands);
 }
@@ -426,6 +510,9 @@ read_block(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, uint64_t slba
             fprintf(stderr, "Append zone failed, err = %d.\n", err);
             exit(1);
     }
+    while (outstanding_commands) {
+        spdk_nvme_qpair_process_completions(qpair, 0);
+    }
 }
 /* zone mgmt send end */
 
@@ -444,105 +531,39 @@ void append_zone(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *b
 void read_block(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer, uint64_t slba, uint32_t lba_count)
 */
 
-/* variables for io request */
-static uint64_t g_num_rw = 0;
-static uint32_t g_num_r = 0; // for sequential
-static uint32_t g_num_w = 0; // for sequential
-static uint32_t g_num_zone_r = 0; // for random
-static uint32_t g_num_zone_w = 0; // for random
-static uint32_t g_num_io_block = 1;
-static uint64_t g_start_tsc = 0;
-static uint64_t g_end_tsc = 0;
-
 static void
-send_seq(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
-{
-    if (g_num_io_block > g_max_append_byte / g_block_byte) {
-        fprintf(stderr, "Number of blocks to access greater than zone append size limit.\n");
-        return exit(1);
+send_req(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
+{ 
+    /* Use the runtime PID to set the random seed */
+    srand(getpid());
+	
+    // R/W ratio = 34%
+    for (int i = 0; i < 198; i++) {
+        uint32_t blksz = 1 << (rand() % 6); // block 1, 2, 4, 8, 16, 32
+        uint64_t zone =  rand() % 16; // zone 0 ~ zone 15
+        uint64_t zslba = zone * g_zone_sz_blk;
+        append_zone(ns, qpair, zslba, blksz);
     }
-
-    g_start_tsc = spdk_get_ticks();
-    for (uint64_t loop = 0; loop < (uint64_t)(g_num_zone / g_max_open_zone); loop++) {
-        for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
-            uint64_t zslba = zone * g_zone_sz_blk;
-            /* append one zone*/
-            for (uint64_t slba = zslba; slba < zslba + g_zone_capacity; slba = slba + g_num_io_block) {
-                if (slba + g_num_io_block > zslba + g_zone_capacity) { // if out of range
-                    break;
-                }
-                //printf("zslba = 0x%lx, slba = 0x%lx \n", zslba, slba);
-                for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0));
-                if (g_num_w > 0) {
-                    append_zone(ns, qpair, zslba, g_num_io_block);
-                    g_num_w--;
-                    //printf("write ");
-                } else if (!g_num_w && g_num_r) {
-                    read_block(ns, qpair, slba, g_num_io_block);
-                    g_num_r--;
-                    //printf("read  ");
-                }
-
-                //printf("g_num_w = %u g_num_r = %u\n", g_num_w, g_num_r);
-            }
-            for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0));
+	
+    for (int j = 0; j < 102; j++) {
+        uint32_t blksz = 1 << (rand() % 6); // block 1, 2, 4, 8, 16, 32
+        uint64_t zone =  rand() % 16; // zone 0 ~ zone 15
+        uint64_t lba = rand() % 16352; //16384 - 32 blocks to avoid out of boundary
+        uint64_t slba = zone * g_zone_sz_blk + lba;
+        read_block(ns, qpair, slba, blksz);
+    }
+	
+    for (int k = 0; k < 12; k++) {
+        uint64_t zone =  rand() % 16; // zone 0 ~ zone 15
+        uint64_t zslba = zone * g_zone_sz_blk;
+        if (k < 6) {
+            open_zone(ns, qpair, zslba);
+        } else if (k >= 6 && k < 10) {
+            close_zone(ns, qpair, zslba);
+        } else {
             finish_zone(ns, qpair, zslba);
         }
-        for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0));
-    }
-    g_end_tsc = spdk_get_ticks();
-}
-
-
-static void
-send_rand(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair)
-{   
-    if (g_num_io_block > g_max_append_byte / g_block_byte) {
-        fprintf(stderr, "Number of blocks to access greater than zone append size limit.\n");
-        return exit(1);
-    }
-
-    g_start_tsc = spdk_get_ticks();
-    for (uint64_t loop = 0; loop < (uint64_t)(g_num_zone / g_max_open_zone); loop++) {
-        uint32_t write = g_num_zone_w;
-        uint32_t read = g_num_zone_r;
-
-        for (uint64_t lba = 0; lba < g_zone_capacity; lba += g_num_io_block) {
-            if (g_zone_capacity - lba < g_num_io_block) { // if out of range
-                break;
-            }
-			
-            for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
-                uint64_t zslba = zone * g_zone_sz_blk;
-                uint64_t slba = zone * g_zone_sz_blk + lba;
-                for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-                if (write) {
-                    //printf("write zslba = 0x%lx\n", zslba); 
-                    append_zone(ns, qpair, zslba, g_num_io_block);
-                } else if (!write && read) {
-                    //printf("read slba = 0x%lx \n", slba);
-                    read_block(ns, qpair, slba, g_num_io_block);
-                }
-            }
-            if (write) {
-                write--;
-                //printf("write = %d\n", write); 
-            } else {
-                read--;
-                //printf("read = %d\n", read); 
-            }
-            for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-        }
-
-        for (uint64_t zone = loop * g_max_open_zone; zone < loop * g_max_open_zone + g_max_open_zone; zone++) {
-            uint64_t zslba = zone * g_zone_sz_blk;
-            for (; outstanding_commands >= g_queue_depth; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-            //printf("finish zslba = 0x%lx\n", zslba);
-            finish_zone(ns, qpair, zslba);
-        }
-        for (; outstanding_commands; spdk_nvme_qpair_process_completions(qpair, 0)); // qd
-    }
-    g_end_tsc = spdk_get_ticks();
+    }  
 }
 
 static void
@@ -551,10 +572,6 @@ usage(const char *program_name)
     printf("usage:\n");
     printf("%s <options>\n", program_name);
     printf("\n");
-    printf(" -r, Random access mode.\n");
-    printf(" -b, Number of blocks to access. It must be power of 2 and not greater than zone append size limit.\n");
-    printf(" -q, Queue depth between 1 to 256. If non specify, default queue depth is 256.\n");
-    printf(" -m, read/write ratio must be the value between 0 to 1. If non specify, default is read 100%%.\n");
     spdk_trace_mask_usage(stdout, "-e");
     printf(" -t, enable spdk_trace_record to capture more trace.\n");
     printf("     (-t must be used with -e)\n");
@@ -565,36 +582,14 @@ parse_args(int argc, char **argv)
 {
     int op;
 
-    while ((op = getopt(argc, argv, "e:rtb:q:m:")) != -1) {
+    while ((op = getopt(argc, argv, "e:t")) != -1) {
         switch (op) {
         case 'e':
             g_spdk_trace = true;
             g_tpoint_group_name = optarg;
             break;
-        case 'r':
-            g_access_rand = true;
-            break;
         case 't':
             g_spdk_trace_record = true;
-            break;
-        case 'b':
-            g_num_io_block = atoi(optarg);
-            if(g_num_io_block == 0) {
-                g_num_io_block = 1;
-            }else if (g_num_io_block & (g_num_io_block - 1)) {
-                fprintf(stderr, "Number of blocks must be power of 2.\n");
-                return 1;
-            }
-            break;
-        case 'q':
-            g_queue_depth = atoi(optarg);
-            break;
-        case 'm':
-            g_rw_ratio = atof(optarg);
-            if(g_rw_ratio < 0.0 || g_rw_ratio > 1.0) {
-                fprintf(stderr, "r/w ratio must be the value between 0 to 1.\n");
-                return 1;
-            }
             break;
         default:
             usage(argv[0]);
@@ -617,7 +612,7 @@ main(int argc, char **argv)
 
     /* Initialize env */
     spdk_env_opts_init(&env_opts);
-    env_opts.name = "mixrw_nvme";
+    env_opts.name = "demo_nvme";
     if (spdk_env_init(&env_opts) < 0) {
         fprintf(stderr, "Unable to initialize SPDK env\n");
         return 1;
@@ -673,29 +668,9 @@ main(int argc, char **argv)
 
     /* Get namespace & zns information */
     zns_info(ns_entry);
-    // for sequential
-    g_num_rw = g_num_zone * (g_zone_capacity / g_num_io_block);
-    g_num_r = g_num_rw * g_rw_ratio;
-    g_num_w = g_num_rw - g_num_r;
-    // for random
-    g_num_zone_r = (g_zone_capacity / g_num_io_block) * g_rw_ratio;
-    g_num_zone_w = (g_zone_capacity / g_num_io_block) - g_num_zone_r;
 
-    /* Send request */
-    if (!g_access_rand) {
-        send_seq(ns_entry->ns, ns_entry->qpair);
-    } else {
-        send_rand(ns_entry->ns, ns_entry->qpair);
-    }    
-
-    uint64_t tsc_diff = g_end_tsc - g_start_tsc;
-    uint64_t tsc_rate = spdk_get_ticks_hz();
-    float sec_diff = tsc_diff / tsc_rate;
-
-    printf("%-16s: %15s \n", "Access mode", g_access_rand ? "Randomness" : "Sequence");
-    printf("%-16s: %15ld \n", "Requests number", g_num_rw + g_num_zone);
-    printf("%-16s: %15.3f (s) \n", "Total time", sec_diff);
-    printf("%-16s: %15.3f \n", "IOPS" , (g_num_rw + g_num_zone) / sec_diff);
+    /* Send I/O request */
+    send_req(ns_entry->ns, ns_entry->qpair);
 
     /* Free io qpair after send request */
     free_qpair(ns_entry->qpair);

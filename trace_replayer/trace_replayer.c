@@ -786,13 +786,10 @@ main(int argc, char **argv)
 
     uint64_t tsc_diff = end_tsc - start_tsc;
     uint64_t tsc_rate = spdk_get_ticks_hz();
-    float sec_diff = tsc_diff / tsc_rate;
-    float us_diff = tsc_diff * 1000 * 1000 / tsc_rate;
+    float sec_diff = tsc_diff * 1000 / tsc_rate;
 
     printf("%-16s: %15ld \n", "Requests number", g_num_io);
-    printf("%-16s: %15.3f (s) \n", "Total time", sec_diff);
-    printf("%-16s: %15.3f \n", "IOPS" , g_num_io / sec_diff);
-    printf("%-16s: %15.3f (us)\n", "Avg Latency", (g_num_io) ? us_diff / g_num_io : 0);
+    printf("%-16s: %15.3f (ms) \n", "Total time", sec_diff);
     
     /* Free io qpair after workload replay */
     free_qpair(ns_entry->qpair);  
