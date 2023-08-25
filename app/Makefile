@@ -5,7 +5,7 @@ APP_DIR := $(abspath $(CURDIR))
 APP_OBJ_DIR := $(APP_DIR)/obj
 APP_BIN_DIR := $(APP_DIR)/bin
 
-APP_TARGETS := seqio_nvme rstzone_nvme mixrw_nvme testreplay_nvme demo_nvme
+APP_TARGETS := access_opz access_zns demo reset_zns
 
 .PHONY: all $(APP_TARGETS) clean
 
